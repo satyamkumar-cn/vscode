@@ -19,14 +19,11 @@ export function getIconClasses(modelService: IModelService, modeService: IModeSe
 
 		// Get the path and name of the resource. For data-URIs, we need to parse specially
 		let name: string | undefined;
-		let path: string | undefined;
 		if (resource.scheme === Schemas.data) {
 			const metadata = DataUri.parseMetaData(resource);
 			name = metadata.get(DataUri.META_DATA_LABEL);
-			path = name;
 		} else {
 			name = cssEscape(basenameOrAuthority(resource).toLowerCase());
-			path = resource.path.toLowerCase();
 		}
 
 		// Folders
@@ -40,55 +37,67 @@ export function getIconClasses(modelService: IModelService, modeService: IModeSe
 			// Name & Extension(s)
 			if (name) {
 				classes.push(`${name}-name-file-icon`);
-				const dotSegments = name.split('.');
-				for (let i = 1; i < dotSegments.length; i++) {
-					classes.push(`${dotSegments.slice(i).join('.')}-ext-file-icon`); // add each combination of all found extensions if more than one
+				// Avoid doing an explosive combination of extensions for very long filenames
+				// (most file systems do not allow files > 255 length) with lots of `.` characters
+				// https://github.com/microsoft/vscode/issues/116199
+				if (name.length <= 255) {
+					const dotSegments = name.split('.');
+					for (let i = 1; i < dotSegments.length; i++) {
+						classes.push(`${dotSegments.slice(i).join('.')}-ext-file-icon`); // add each combination of all found extensions if more than one
+					}
 				}
 				classes.push(`ext-file-icon`); // extra segment to increase file-ext score
 			}
 
-			// Configured Language
-			let configuredLangId: string | null = getConfiguredLangId(modelService, modeService, resource);
-			configuredLangId = configuredLangId || (path ? modeService.getModeIdByFilepathOrFirstLine(path) : null);
-			if (configuredLangId) {
-				classes.push(`${cssEscape(configuredLangId)}-lang-file-icon`);
+			// Detected Mode
+			const detectedModeId = detectModeId(modelService, modeService, resource);
+			if (detectedModeId) {
+				classes.push(`${cssEscape(detectedModeId)}-lang-file-icon`);
 			}
 		}
 	}
 	return classes;
 }
 
-export function getConfiguredLangId(modelService: IModelService, modeService: IModeService, resource: uri): string | null {
-	let configuredLangId: string | null = null;
-	if (resource) {
-		let modeId: string | null = null;
 
-		// Data URI: check for encoded metadata
-		if (resource.scheme === Schemas.data) {
-			const metadata = DataUri.parseMetaData(resource);
-			const mime = metadata.get(DataUri.META_DATA_MIME);
+export function getIconClassesForModeId(modeId: string): string[] {
+	return ['file-icon', `${cssEscape(modeId)}-lang-file-icon`];
+}
 
-			if (mime) {
-				modeId = modeService.getModeId(mime);
-			}
-		}
+export function detectModeId(modelService: IModelService, modeService: IModeService, resource: uri): string | null {
+	if (!resource) {
+		return null; // we need a resource at least
+	}
 
-		// Any other URI: check for model if existing
-		else {
-			const model = modelService.getModel(resource);
-			if (model) {
-				modeId = model.getLanguageIdentifier().language;
-			}
-		}
+	let modeId: string | null = null;
 
-		if (modeId && modeId !== PLAINTEXT_MODE_ID) {
-			configuredLangId = modeId; // only take if the mode is specific (aka no just plain text)
+	// Data URI: check for encoded metadata
+	if (resource.scheme === Schemas.data) {
+		const metadata = DataUri.parseMetaData(resource);
+		const mime = metadata.get(DataUri.META_DATA_MIME);
+
+		if (mime) {
+			modeId = modeService.getModeId(mime);
 		}
 	}
 
-	return configuredLangId;
+	// Any other URI: check for model if existing
+	else {
+		const model = modelService.getModel(resource);
+		if (model) {
+			modeId = model.getModeId();
+		}
+	}
+
+	// only take if the mode is specific (aka no just plain text)
+	if (modeId && modeId !== PLAINTEXT_MODE_ID) {
+		return modeId;
+	}
+
+	// otherwise fallback to path based detection
+	return modeService.getModeIdByFilepathOrFirstLine(resource);
 }
 
-export function cssEscape(val: string): string {
-	return val.replace(/\s/g, '\\$&'); // make sure to not introduce CSS classes from files that contain whitespace
+export function cssEscape(str: string): string {
+	return str.replace(/[\11\12\14\15\40]/g, '/'); // HTML class names can not contain certain whitespace characters, use / instead, which doesn't exist in file names.
 }

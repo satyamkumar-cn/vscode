@@ -3,16 +3,16 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { dispose, IDisposable } from 'vs/base/common/lifecycle';
-import { isLinux } from 'vs/base/common/platform';
+import { DisposableStore, dispose, IDisposable } from 'vs/base/common/lifecycle';
 import { isEqual } from 'vs/base/common/resources';
-import { endsWith } from 'vs/base/common/strings';
 import { URI } from 'vs/base/common/uri';
 import { ITextModel } from 'vs/editor/common/model';
 import { IModelService } from 'vs/editor/common/services/modelService';
 import { IModeService } from 'vs/editor/common/services/modeService';
 import { ITextModelService } from 'vs/editor/common/services/resolverService';
+import * as nls from 'vs/nls';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { ConfigurationScope, Extensions, IConfigurationRegistry } from 'vs/platform/configuration/common/configurationRegistry';
 import { IEditorOptions, ITextEditorOptions } from 'vs/platform/editor/common/editor';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import * as JSONContributionRegistry from 'vs/platform/jsonschemas/common/jsonContributionRegistry';
@@ -20,14 +20,15 @@ import { Registry } from 'vs/platform/registry/common/platform';
 import { IWorkspaceContextService, WorkbenchState } from 'vs/platform/workspace/common/workspace';
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
 import { IEditorInput } from 'vs/workbench/common/editor';
-import { IEditorService, IOpenEditorOverride } from 'vs/workbench/services/editor/common/editorService';
 import { IEditorGroup } from 'vs/workbench/services/editor/common/editorGroupsService';
+import { IEditorService, IOpenEditorOverride } from 'vs/workbench/services/editor/common/editorService';
 import { FOLDER_SETTINGS_PATH, IPreferencesService, USE_SPLIT_JSON_SETTING } from 'vs/workbench/services/preferences/common/preferences';
+import { workbenchConfigurationNodeBase } from 'vs/workbench/common/configuration';
 
 const schemaRegistry = Registry.as<JSONContributionRegistry.IJSONContributionRegistry>(JSONContributionRegistry.Extensions.JSONContribution);
 
 export class PreferencesContribution implements IWorkbenchContribution {
-	private editorOpeningListener: IDisposable;
+	private editorOpeningListener: IDisposable | undefined;
 	private settingsListener: IDisposable;
 
 	constructor(
@@ -53,19 +54,21 @@ export class PreferencesContribution implements IWorkbenchContribution {
 	private handleSettingsEditorOverride(): void {
 
 		// dispose any old listener we had
-		this.editorOpeningListener = dispose(this.editorOpeningListener);
+		dispose(this.editorOpeningListener);
 
 		// install editor opening listener unless user has disabled this
 		if (!!this.configurationService.getValue(USE_SPLIT_JSON_SETTING)) {
-			this.editorOpeningListener = this.editorService.overrideOpenEditor((editor, options, group) => this.onEditorOpening(editor, options, group));
+			this.editorOpeningListener = this.editorService.overrideOpenEditor({
+				open: (editor, options, group) => this.onEditorOpening(editor, options, group)
+			});
 		}
 	}
 
-	private onEditorOpening(editor: IEditorInput, options: IEditorOptions | ITextEditorOptions, group: IEditorGroup): IOpenEditorOverride {
-		const resource = editor.getResource();
+	private onEditorOpening(editor: IEditorInput, options: IEditorOptions | ITextEditorOptions | undefined, group: IEditorGroup): IOpenEditorOverride | undefined {
+		const resource = editor.resource;
 		if (
 			!resource ||
-			!endsWith(resource.path, 'settings.json') ||								// resource must end in settings.json
+			!resource.path.endsWith('settings.json') ||								// resource must end in settings.json
 			!this.configurationService.getValue(USE_SPLIT_JSON_SETTING)					// user has not disabled default settings editor
 		) {
 			return undefined;
@@ -73,13 +76,13 @@ export class PreferencesContribution implements IWorkbenchContribution {
 
 		// If the resource was already opened before in the group, do not prevent
 		// the opening of that resource. Otherwise we would have the same settings
-		// opened twice (https://github.com/Microsoft/vscode/issues/36447)
-		if (group.isOpened(editor)) {
+		// opened twice (https://github.com/microsoft/vscode/issues/36447)
+		if (group.contains(editor)) {
 			return undefined;
 		}
 
 		// Global User Settings File
-		if (isEqual(resource, URI.file(this.environmentService.appSettingsPath), !isLinux)) {
+		if (isEqual(resource, this.environmentService.settingsResource)) {
 			return { override: this.preferencesService.openGlobalSettings(true, options, group) };
 		}
 
@@ -108,7 +111,7 @@ export class PreferencesContribution implements IWorkbenchContribution {
 	private start(): void {
 
 		this.textModelResolverService.registerTextModelContentProvider('vscode', {
-			provideTextContent: (uri: URI): Promise<ITextModel> => {
+			provideTextContent: (uri: URI): Promise<ITextModel | null> | null => {
 				if (uri.scheme !== 'vscode') {
 					return null;
 				}
@@ -123,20 +126,20 @@ export class PreferencesContribution implements IWorkbenchContribution {
 		});
 	}
 
-	private getSchemaModel(uri: URI): ITextModel {
+	private getSchemaModel(uri: URI): ITextModel | null {
 		let schema = schemaRegistry.getSchemaContributions().schemas[uri.toString()];
 		if (schema) {
 			const modelContent = JSON.stringify(schema);
 			const languageSelection = this.modeService.create('jsonc');
 			const model = this.modelService.createModel(modelContent, languageSelection, uri);
-			const disposables: IDisposable[] = [];
-			disposables.push(schemaRegistry.onDidChangeSchema(schemaUri => {
+			const disposables = new DisposableStore();
+			disposables.add(schemaRegistry.onDidChangeSchema(schemaUri => {
 				if (schemaUri === uri.toString()) {
 					schema = schemaRegistry.getSchemaContributions().schemas[uri.toString()];
 					model.setValue(JSON.stringify(schema));
 				}
 			}));
-			disposables.push(model.onWillDispose(() => dispose(disposables)));
+			disposables.add(model.onWillDispose(() => disposables.dispose()));
 
 			return model;
 		}
@@ -144,7 +147,32 @@ export class PreferencesContribution implements IWorkbenchContribution {
 	}
 
 	dispose(): void {
-		this.editorOpeningListener = dispose(this.editorOpeningListener);
-		this.settingsListener = dispose(this.settingsListener);
+		dispose(this.editorOpeningListener);
+		dispose(this.settingsListener);
 	}
 }
+
+const registry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
+registry.registerConfiguration({
+	...workbenchConfigurationNodeBase,
+	'properties': {
+		'workbench.settings.enableNaturalLanguageSearch': {
+			'type': 'boolean',
+			'description': nls.localize('enableNaturalLanguageSettingsSearch', "Controls whether to enable the natural language search mode for settings. The natural language search is provided by a Microsoft online service."),
+			'default': true,
+			'scope': ConfigurationScope.WINDOW,
+			'tags': ['usesOnlineServices']
+		},
+		'workbench.settings.settingsSearchTocBehavior': {
+			'type': 'string',
+			'enum': ['hide', 'filter'],
+			'enumDescriptions': [
+				nls.localize('settingsSearchTocBehavior.hide', "Hide the Table of Contents while searching."),
+				nls.localize('settingsSearchTocBehavior.filter', "Filter the Table of Contents to just categories that have matching settings. Clicking a category will filter the results to that category."),
+			],
+			'description': nls.localize('settingsSearchTocBehavior', "Controls the behavior of the settings editor Table of Contents while searching."),
+			'default': 'filter',
+			'scope': ConfigurationScope.WINDOW
+		},
+	}
+});

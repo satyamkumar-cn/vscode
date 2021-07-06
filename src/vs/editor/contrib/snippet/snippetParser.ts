@@ -56,12 +56,8 @@ export class Scanner {
 			|| (ch >= CharCode.A && ch <= CharCode.Z);
 	}
 
-	value: string;
-	pos: number;
-
-	constructor() {
-		this.text('');
-	}
+	value: string = '';
+	pos: number = 0;
 
 	text(value: string) {
 		this.value = value;
@@ -135,7 +131,7 @@ export abstract class Marker {
 
 	readonly _markerBrand: any;
 
-	public parent: Marker;
+	public parent!: Marker;
 	protected _children: Marker[] = [];
 
 	appendChild(child: Marker): this {
@@ -204,13 +200,13 @@ export class Text extends Marker {
 	constructor(public value: string) {
 		super();
 	}
-	toString() {
+	override toString() {
 		return this.value;
 	}
 	toTextmateString(): string {
 		return Text.escape(this.value);
 	}
-	len(): number {
+	override len(): number {
 		return this.value.length;
 	}
 	clone(): Text {
@@ -219,7 +215,7 @@ export class Text extends Marker {
 }
 
 export abstract class TransformableMarker extends Marker {
-	public transform: Transform;
+	public transform?: Transform;
 }
 
 export class Placeholder extends TransformableMarker {
@@ -283,7 +279,7 @@ export class Choice extends Marker {
 
 	readonly options: Text[] = [];
 
-	appendChild(marker: Marker): this {
+	override appendChild(marker: Marker): this {
 		if (marker instanceof Text) {
 			marker.parent = this;
 			this.options.push(marker);
@@ -291,7 +287,7 @@ export class Choice extends Marker {
 		return this;
 	}
 
-	toString() {
+	override toString() {
 		return this.options[0].value;
 	}
 
@@ -301,7 +297,7 @@ export class Choice extends Marker {
 			.join(',');
 	}
 
-	len(): number {
+	override len(): number {
 		return this.options[0].len();
 	}
 
@@ -314,7 +310,7 @@ export class Choice extends Marker {
 
 export class Transform extends Marker {
 
-	regexp: RegExp;
+	regexp: RegExp = new RegExp('');
 
 	resolve(value: string): string {
 		const _this = this;
@@ -345,7 +341,7 @@ export class Transform extends Marker {
 		return ret;
 	}
 
-	toString(): string {
+	override toString(): string {
 		return '';
 	}
 
@@ -559,12 +555,12 @@ export class TextmateSnippet extends Marker {
 		return this;
 	}
 
-	appendChild(child: Marker) {
+	override appendChild(child: Marker) {
 		this._placeholders = undefined;
 		return super.appendChild(child);
 	}
 
-	replace(child: Marker, others: Marker[]): void {
+	override replace(child: Marker, others: Marker[]): void {
 		this._placeholders = undefined;
 		return super.replace(child, others);
 	}
@@ -590,8 +586,12 @@ export class SnippetParser {
 		return value.replace(/\$|}|\\/g, '\\$&');
 	}
 
-	private _scanner = new Scanner();
-	private _token: Token;
+	static guessNeedsClipboard(template: string): boolean {
+		return /\${?CLIPBOARD/.test(template);
+	}
+
+	private _scanner: Scanner = new Scanner();
+	private _token: Token = { type: TokenType.EOF, pos: 0, len: 0 };
 
 	text(value: string): string {
 		return this.parse(value).toString();
@@ -609,7 +609,7 @@ export class SnippetParser {
 
 		// fill in values for placeholders. the first placeholder of an index
 		// that has a value defines the value for all placeholders with that index
-		const placeholderDefaultValues = new Map<number, Marker[]>();
+		const placeholderDefaultValues = new Map<number, Marker[] | undefined>();
 		const incompletePlaceholders: Placeholder[] = [];
 		let placeholderCount = 0;
 		snippet.walk(marker => {
@@ -668,17 +668,21 @@ export class SnippetParser {
 	}
 
 	private _until(type: TokenType): false | string {
-		if (this._token.type === TokenType.EOF) {
-			return false;
-		}
-		let start = this._token;
+		const start = this._token;
 		while (this._token.type !== type) {
-			this._token = this._scanner.next();
 			if (this._token.type === TokenType.EOF) {
 				return false;
+			} else if (this._token.type === TokenType.Backslash) {
+				const nextToken = this._scanner.next();
+				if (nextToken.type !== TokenType.Dollar
+					&& nextToken.type !== TokenType.CurlyClose
+					&& nextToken.type !== TokenType.Backslash) {
+					return false;
+				}
 			}
+			this._token = this._scanner.next();
 		}
-		let value = this._scanner.value.substring(start.pos, this._token.pos);
+		const value = this._scanner.value.substring(start.pos, this._token.pos).replace(/\\(\$|}|\\)/g, '$1');
 		this._token = this._scanner.next();
 		return value;
 	}

@@ -3,267 +3,133 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { Event } from 'vs/base/common/event';
-import { ITelemetryData } from 'vs/platform/telemetry/common/telemetry';
-import { IProcessEnvironment, isMacintosh, isLinux } from 'vs/base/common/platform';
-import { ParsedArgs, IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { IWorkspaceIdentifier, ISingleFolderWorkspaceIdentifier } from 'vs/platform/workspaces/common/workspaces';
-import { IRecentlyOpened } from 'vs/platform/history/common/history';
-import { ISerializableCommandAction } from 'vs/platform/actions/common/actions';
-import { ExportData } from 'vs/base/common/performance';
-import { LogLevel } from 'vs/platform/log/common/log';
-import { IDisposable, dispose } from 'vs/base/common/lifecycle';
+import { isMacintosh, isLinux, isWeb, isNative } from 'vs/base/common/platform';
 import { URI, UriComponents } from 'vs/base/common/uri';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { IWorkspaceIdentifier, ISingleFolderWorkspaceIdentifier } from 'vs/platform/workspaces/common/workspaces';
+import { NativeParsedArgs } from 'vs/platform/environment/common/argv';
+import { LogLevel } from 'vs/platform/log/common/log';
+import { PerformanceMark } from 'vs/base/common/performance';
+import { ISandboxConfiguration } from 'vs/base/parts/sandbox/common/sandboxTypes';
 
-export const IWindowsService = createDecorator<IWindowsService>('windowsService');
+export const WindowMinimumSize = {
+	WIDTH: 400,
+	WIDTH_WITH_VERTICAL_PANEL: 600,
+	HEIGHT: 270
+};
 
-export interface INativeOpenDialogOptions {
-	windowId?: number;
-	forceNewWindow?: boolean;
-
-	dialogOptions?: OpenDialogOptions;
-
-	telemetryEventName?: string;
-	telemetryExtraData?: ITelemetryData;
+export interface IBaseOpenWindowsOptions {
+	readonly forceReuseWindow?: boolean;
+	/**
+	 * The remote authority to use when windows are opened with either
+	 * - no workspace (empty window)
+	 * - a workspace that is neither `file://` nor `vscode-remote://`
+	 * Use 'null' for a local window.
+	 * If not set, defaults to the remote authority of the current window.
+	 */
+	readonly remoteAuthority?: string | null;
 }
 
-export interface IEnterWorkspaceResult {
-	workspace: IWorkspaceIdentifier;
-	backupPath?: string;
+export interface IOpenWindowOptions extends IBaseOpenWindowsOptions {
+	readonly forceNewWindow?: boolean;
+	readonly preferNewWindow?: boolean;
+
+	readonly noRecentEntry?: boolean;
+
+	readonly addMode?: boolean;
+
+	readonly diffMode?: boolean;
+	readonly gotoLineMode?: boolean;
+
+	readonly waitMarkerFileURI?: URI;
 }
 
-export interface CrashReporterStartOptions {
-	companyName?: string;
-	submitURL: string;
-	productName?: string;
-	uploadToServer?: boolean;
-	ignoreSystemCrashHandler?: boolean;
-	extra?: any;
-	crashesDirectory?: string;
+export interface IAddFoldersRequest {
+	readonly foldersToAdd: UriComponents[];
 }
 
-export interface OpenDialogOptions {
-	title?: string;
-	defaultPath?: string;
-	buttonLabel?: string;
-	filters?: FileFilter[];
-	properties?: Array<'openFile' | 'openDirectory' | 'multiSelections' | 'showHiddenFiles' | 'createDirectory' | 'promptToCreate' | 'noResolveAliases' | 'treatPackageAsDirectory'>;
-	message?: string;
+export interface IOpenedWindow {
+	readonly id: number;
+	readonly workspace?: IWorkspaceIdentifier | ISingleFolderWorkspaceIdentifier;
+	readonly title: string;
+	readonly filename?: string;
+	readonly dirty: boolean;
 }
 
-export interface FileFilter {
-	extensions: string[];
-	name: string;
+export interface IOpenEmptyWindowOptions extends IBaseOpenWindowsOptions {
 }
 
-export interface MessageBoxOptions {
-	type?: string;
-	buttons?: string[];
-	defaultId?: number;
-	title?: string;
-	message: string;
-	detail?: string;
-	checkboxLabel?: string;
-	checkboxChecked?: boolean;
-	cancelId?: number;
-	noLink?: boolean;
-	normalizeAccessKeys?: boolean;
+export type IWindowOpenable = IWorkspaceToOpen | IFolderToOpen | IFileToOpen;
+
+export interface IBaseWindowOpenable {
+	label?: string;
 }
 
-export interface SaveDialogOptions {
-	title?: string;
-	defaultPath?: string;
-	buttonLabel?: string;
-	filters?: FileFilter[];
-	message?: string;
-	nameFieldLabel?: string;
-	showsTagField?: boolean;
+export interface IWorkspaceToOpen extends IBaseWindowOpenable {
+	readonly workspaceUri: URI;
 }
 
-export interface INewWindowOptions {
-	remoteAuthority?: string;
+export interface IFolderToOpen extends IBaseWindowOpenable {
+	readonly folderUri: URI;
 }
 
-export interface IDevToolsOptions {
-	mode: 'right' | 'bottom' | 'undocked' | 'detach';
+export interface IFileToOpen extends IBaseWindowOpenable {
+	readonly fileUri: URI;
 }
 
-export interface IWindowsService {
-
-	_serviceBrand: any;
-
-	onWindowOpen: Event<number>;
-	onWindowFocus: Event<number>;
-	onWindowBlur: Event<number>;
-	onWindowMaximize: Event<number>;
-	onWindowUnmaximize: Event<number>;
-	onRecentlyOpenedChange: Event<void>;
-
-	// Dialogs
-	pickFileFolderAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	pickFileAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	pickFolderAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	pickWorkspaceAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	showMessageBox(windowId: number, options: MessageBoxOptions): Promise<IMessageBoxResult>;
-	showSaveDialog(windowId: number, options: SaveDialogOptions): Promise<string>;
-	showOpenDialog(windowId: number, options: OpenDialogOptions): Promise<string[]>;
-
-	reloadWindow(windowId: number, args?: ParsedArgs): Promise<void>;
-	openDevTools(windowId: number, options?: IDevToolsOptions): Promise<void>;
-	toggleDevTools(windowId: number): Promise<void>;
-	closeWorkspace(windowId: number): Promise<void>;
-	enterWorkspace(windowId: number, path: URI): Promise<IEnterWorkspaceResult | undefined>;
-	toggleFullScreen(windowId: number): Promise<void>;
-	setRepresentedFilename(windowId: number, fileName: string): Promise<void>;
-	addRecentlyOpened(files: URI[]): Promise<void>;
-	removeFromRecentlyOpened(paths: Array<IWorkspaceIdentifier | ISingleFolderWorkspaceIdentifier | URI | string>): Promise<void>;
-	clearRecentlyOpened(): Promise<void>;
-	getRecentlyOpened(windowId: number): Promise<IRecentlyOpened>;
-	focusWindow(windowId: number): Promise<void>;
-	closeWindow(windowId: number): Promise<void>;
-	isFocused(windowId: number): Promise<boolean>;
-	isMaximized(windowId: number): Promise<boolean>;
-	maximizeWindow(windowId: number): Promise<void>;
-	unmaximizeWindow(windowId: number): Promise<void>;
-	minimizeWindow(windowId: number): Promise<void>;
-	onWindowTitleDoubleClick(windowId: number): Promise<void>;
-	setDocumentEdited(windowId: number, flag: boolean): Promise<void>;
-	quit(): Promise<void>;
-	relaunch(options: { addArgs?: string[], removeArgs?: string[] }): Promise<void>;
-
-	// macOS Native Tabs
-	newWindowTab(): Promise<void>;
-	showPreviousWindowTab(): Promise<void>;
-	showNextWindowTab(): Promise<void>;
-	moveWindowTabToNewWindow(): Promise<void>;
-	mergeAllWindowTabs(): Promise<void>;
-	toggleWindowTabsBar(): Promise<void>;
-
-	// macOS TouchBar
-	updateTouchBar(windowId: number, items: ISerializableCommandAction[][]): Promise<void>;
-
-	// Shared process
-	whenSharedProcessReady(): Promise<void>;
-	toggleSharedProcess(): Promise<void>;
-
-	// Global methods
-	openWindow(windowId: number, uris: IURIToOpen[], options?: IOpenSettings): Promise<void>;
-	openNewWindow(options?: INewWindowOptions): Promise<void>;
-	showWindow(windowId: number): Promise<void>;
-	getWindows(): Promise<{ id: number; workspace?: IWorkspaceIdentifier; folderUri?: ISingleFolderWorkspaceIdentifier; title: string; filename?: string; }[]>;
-	getWindowCount(): Promise<number>;
-	log(severity: string, ...messages: string[]): Promise<void>;
-	showItemInFolder(path: string): Promise<void>;
-	getActiveWindowId(): Promise<number | undefined>;
-
-	// This needs to be handled from browser process to prevent
-	// foreground ordering issues on Windows
-	openExternal(url: string): Promise<boolean>;
-
-	// TODO: this is a bit backwards
-	startCrashReporter(config: CrashReporterStartOptions): Promise<void>;
-
-	openAboutDialog(): Promise<void>;
-	resolveProxy(windowId: number, url: string): Promise<string | undefined>;
+export function isWorkspaceToOpen(uriToOpen: IWindowOpenable): uriToOpen is IWorkspaceToOpen {
+	return !!(uriToOpen as IWorkspaceToOpen).workspaceUri;
 }
 
-export const IWindowService = createDecorator<IWindowService>('windowService');
-
-export interface IMessageBoxResult {
-	button: number;
-	checkboxChecked?: boolean;
+export function isFolderToOpen(uriToOpen: IWindowOpenable): uriToOpen is IFolderToOpen {
+	return !!(uriToOpen as IFolderToOpen).folderUri;
 }
 
-export interface IOpenSettings {
-	forceNewWindow?: boolean;
-	forceReuseWindow?: boolean;
-	forceOpenWorkspaceAsFile?: boolean;
-	diffMode?: boolean;
-	addMode?: boolean;
-	args?: ParsedArgs;
+export function isFileToOpen(uriToOpen: IWindowOpenable): uriToOpen is IFileToOpen {
+	return !!(uriToOpen as IFileToOpen).fileUri;
 }
 
-export type URIType = 'file' | 'folder';
+export type MenuBarVisibility = 'classic' | 'visible' | 'toggle' | 'hidden' | 'compact';
 
-export interface IURIToOpen {
-	uri: URI;
-	typeHint?: URIType;
+export function getMenuBarVisibility(configurationService: IConfigurationService): MenuBarVisibility {
+	const titleBarStyle = getTitleBarStyle(configurationService);
+	const menuBarVisibility = configurationService.getValue<MenuBarVisibility | 'default'>('window.menuBarVisibility');
+
+	if (menuBarVisibility === 'default' || (titleBarStyle === 'native' && menuBarVisibility === 'compact') || (isMacintosh && isNative)) {
+		return 'classic';
+	} else {
+		return menuBarVisibility;
+	}
 }
-
-export interface IWindowService {
-
-	_serviceBrand: any;
-
-	readonly onDidChangeFocus: Event<boolean>;
-	readonly onDidChangeMaximize: Event<boolean>;
-
-	readonly hasFocus: boolean;
-
-	getConfiguration(): IWindowConfiguration;
-	getCurrentWindowId(): number;
-	pickFileFolderAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	pickFileAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	pickFolderAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	pickWorkspaceAndOpen(options: INativeOpenDialogOptions): Promise<void>;
-	reloadWindow(args?: ParsedArgs): Promise<void>;
-	openDevTools(options?: IDevToolsOptions): Promise<void>;
-	toggleDevTools(): Promise<void>;
-	closeWorkspace(): Promise<void>;
-	updateTouchBar(items: ISerializableCommandAction[][]): Promise<void>;
-	enterWorkspace(path: URI): Promise<IEnterWorkspaceResult | undefined>;
-	toggleFullScreen(): Promise<void>;
-	setRepresentedFilename(fileName: string): Promise<void>;
-	getRecentlyOpened(): Promise<IRecentlyOpened>;
-	focusWindow(): Promise<void>;
-	closeWindow(): Promise<void>;
-	openWindow(uris: IURIToOpen[], options?: IOpenSettings): Promise<void>;
-	isFocused(): Promise<boolean>;
-	setDocumentEdited(flag: boolean): Promise<void>;
-	isMaximized(): Promise<boolean>;
-	maximizeWindow(): Promise<void>;
-	unmaximizeWindow(): Promise<void>;
-	minimizeWindow(): Promise<void>;
-	onWindowTitleDoubleClick(): Promise<void>;
-	show(): Promise<void>;
-	showMessageBox(options: MessageBoxOptions): Promise<IMessageBoxResult>;
-	showSaveDialog(options: SaveDialogOptions): Promise<string>;
-	showOpenDialog(options: OpenDialogOptions): Promise<string[]>;
-	resolveProxy(url: string): Promise<string | undefined>;
-}
-
-export type MenuBarVisibility = 'default' | 'visible' | 'toggle' | 'hidden';
 
 export interface IWindowsConfiguration {
-	window: IWindowSettings;
+	readonly window: IWindowSettings;
 }
 
 export interface IWindowSettings {
-	openFilesInNewWindow: 'on' | 'off' | 'default';
-	openFoldersInNewWindow: 'on' | 'off' | 'default';
-	openWithoutArgumentsInNewWindow: 'on' | 'off';
-	restoreWindows: 'all' | 'folders' | 'one' | 'none';
-	restoreFullscreen: boolean;
-	zoomLevel: number;
-	titleBarStyle: 'native' | 'custom';
-	autoDetectHighContrast: boolean;
-	menuBarVisibility: MenuBarVisibility;
-	newWindowDimensions: 'default' | 'inherit' | 'maximized' | 'fullscreen';
-	nativeTabs: boolean;
-	nativeFullScreen: boolean;
-	enableMenuBarMnemonics: boolean;
-	closeWhenEmpty: boolean;
-	clickThroughInactive: boolean;
+	readonly openFilesInNewWindow: 'on' | 'off' | 'default';
+	readonly openFoldersInNewWindow: 'on' | 'off' | 'default';
+	readonly openWithoutArgumentsInNewWindow: 'on' | 'off';
+	readonly restoreWindows: 'preserve' | 'all' | 'folders' | 'one' | 'none';
+	readonly restoreFullscreen: boolean;
+	readonly zoomLevel: number;
+	readonly titleBarStyle: 'native' | 'custom';
+	readonly autoDetectHighContrast: boolean;
+	readonly menuBarVisibility: MenuBarVisibility;
+	readonly newWindowDimensions: 'default' | 'inherit' | 'offset' | 'maximized' | 'fullscreen';
+	readonly nativeTabs: boolean;
+	readonly nativeFullScreen: boolean;
+	readonly enableMenuBarMnemonics: boolean;
+	readonly closeWhenEmpty: boolean;
+	readonly clickThroughInactive: boolean;
 }
 
-export function getTitleBarStyle(configurationService: IConfigurationService, environment: IEnvironmentService, isExtensionDevelopment = environment.isExtensionDevelopment): 'native' | 'custom' {
-	const configuration = configurationService.getValue<IWindowSettings>('window');
-
-	const isDev = !environment.isBuilt || isExtensionDevelopment;
-	if (isMacintosh && isDev) {
-		return 'native'; // not enabled when developing due to https://github.com/electron/electron/issues/3647
+export function getTitleBarStyle(configurationService: IConfigurationService): 'native' | 'custom' {
+	if (isWeb) {
+		return 'custom';
 	}
+
+	const configuration = configurationService.getValue<IWindowSettings | undefined>('window');
 
 	if (configuration) {
 		const useNativeTabs = isMacintosh && configuration.nativeTabs === true;
@@ -273,7 +139,7 @@ export function getTitleBarStyle(configurationService: IConfigurationService, en
 
 		const useSimpleFullScreen = isMacintosh && configuration.nativeFullScreen === false;
 		if (useSimpleFullScreen) {
-			return 'native'; // simple fullscreen does not work well with custom title style (https://github.com/Microsoft/vscode/issues/63291)
+			return 'native'; // simple fullscreen does not work well with custom title style (https://github.com/microsoft/vscode/issues/63291)
 		}
 
 		const style = configuration.titleBarStyle;
@@ -285,171 +151,122 @@ export function getTitleBarStyle(configurationService: IConfigurationService, en
 	return isLinux ? 'native' : 'custom'; // default to custom on all macOS and Windows
 }
 
-export const enum OpenContext {
-
-	// opening when running from the command line
-	CLI,
-
-	// macOS only: opening from the dock (also when opening files to a running instance from desktop)
-	DOCK,
-
-	// opening from the main application window
-	MENU,
-
-	// opening from a file or folder dialog
-	DIALOG,
-
-	// opening from the OS's UI
-	DESKTOP,
-
-	// opening through the API
-	API
-}
-
-export const enum ReadyState {
-
-	/**
-	 * This window has not loaded any HTML yet
-	 */
-	NONE,
-
-	/**
-	 * This window is loading HTML
-	 */
-	LOADING,
-
-	/**
-	 * This window is navigating to another HTML
-	 */
-	NAVIGATING,
-
-	/**
-	 * This window is done loading HTML
-	 */
-	READY
-}
-
 export interface IPath extends IPathData {
 
-	// the file path to open within a Code instance
+	// the file path to open within the instance
 	fileUri?: URI;
-}
-
-export interface IPathsToWaitFor extends IPathsToWaitForData {
-	paths: IPath[];
-}
-
-export interface IPathsToWaitForData {
-	paths: IPathData[];
-	waitMarkerFilePath: string;
 }
 
 export interface IPathData {
 
-	// the file path to open within a Code instance
-	fileUri?: UriComponents;
+	// the file path to open within the instance
+	readonly fileUri?: UriComponents;
 
 	// the line number in the file path to open
-	lineNumber?: number;
+	readonly lineNumber?: number;
 
 	// the column number in the file path to open
-	columnNumber?: number;
+	readonly columnNumber?: number;
+
+	// a hint that the file exists. if true, the
+	// file exists, if false it does not. with
+	// undefined the state is unknown.
+	readonly exists?: boolean;
+
+	// Specifies if the file should be only be opened if it exists
+	readonly openOnlyIfExists?: boolean;
+
+	// Specifies an optional id to override the editor used to edit the resource, e.g. custom editor.
+	readonly editorOverrideId?: string;
+}
+
+export interface IPathsToWaitFor extends IPathsToWaitForData {
+	paths: IPath[];
+	waitMarkerFileUri: URI;
+}
+
+interface IPathsToWaitForData {
+	readonly paths: IPathData[];
+	readonly waitMarkerFileUri: UriComponents;
 }
 
 export interface IOpenFileRequest {
-	filesToOpen?: IPathData[];
-	filesToCreate?: IPathData[];
-	filesToDiff?: IPathData[];
-	filesToWait?: IPathsToWaitForData;
-	termProgram?: string;
+	readonly filesToOpenOrCreate?: IPathData[];
+	readonly filesToDiff?: IPathData[];
 }
 
-export interface IAddFoldersRequest {
-	foldersToAdd: UriComponents[];
+/**
+ * Additional context for the request on native only.
+ */
+export interface INativeOpenFileRequest extends IOpenFileRequest {
+	readonly termProgram?: string;
+	readonly filesToWait?: IPathsToWaitForData;
 }
 
-export interface IWindowConfiguration extends ParsedArgs {
-	machineId: string;
-	windowId: number;
-	logLevel: LogLevel;
+export interface INativeRunActionInWindowRequest {
+	readonly id: string;
+	readonly from: 'menu' | 'touchbar' | 'mouse';
+	readonly args?: any[];
+}
 
-	mainPid: number;
+export interface INativeRunKeybindingInWindowRequest {
+	readonly userSettingsLabel: string;
+}
 
-	appRoot: string;
-	execPath: string;
-	isInitialStartup?: boolean;
+export interface IColorScheme {
+	readonly dark: boolean;
+	readonly highContrast: boolean;
+}
 
-	userEnv: IProcessEnvironment;
-	nodeCachedDataDir?: string;
-
-	backupPath?: string;
-
-	workspace?: IWorkspaceIdentifier;
-	folderUri?: ISingleFolderWorkspaceIdentifier;
-
+export interface IWindowConfiguration {
 	remoteAuthority?: string;
 
-	zoomLevel?: number;
+	colorScheme: IColorScheme;
+	autoDetectHighContrast?: boolean;
+
+	filesToOpenOrCreate?: IPath[];
+	filesToDiff?: IPath[];
+}
+
+export interface IOSConfiguration {
+	readonly release: string;
+	readonly hostname: string;
+}
+
+export interface INativeWindowConfiguration extends IWindowConfiguration, NativeParsedArgs, ISandboxConfiguration {
+	mainPid: number;
+
+	machineId: string;
+
+	execPath: string;
+	backupPath?: string;
+
+	homeDir: string;
+	tmpDir: string;
+	userDataDir: string;
+
+	partsSplashPath: string;
+
+	workspace?: IWorkspaceIdentifier | ISingleFolderWorkspaceIdentifier;
+
+	isInitialStartup?: boolean;
+	logLevel: LogLevel;
+
 	fullscreen?: boolean;
 	maximized?: boolean;
-	highContrast?: boolean;
-	frameless?: boolean;
 	accessibilitySupport?: boolean;
-	partsSplashPath?: string;
 
-	perfStartTime?: number;
-	perfAppReady?: number;
-	perfWindowLoadTime?: number;
-	perfEntries: ExportData;
+	perfMarks: PerformanceMark[];
 
-	filesToOpen?: IPath[];
-	filesToCreate?: IPath[];
-	filesToDiff?: IPath[];
 	filesToWait?: IPathsToWaitFor;
-	termProgram?: string;
+
+	os: IOSConfiguration;
 }
 
-export interface IRunActionInWindowRequest {
-	id: string;
-	from: 'menu' | 'touchbar' | 'mouse';
-	args?: any[];
-}
-
-export interface IRunKeybindingInWindowRequest {
-	userSettingsLabel: string;
-}
-
-export class ActiveWindowManager implements IDisposable {
-
-	private disposables: IDisposable[] = [];
-	private firstActiveWindowIdPromise: Promise<any> | null;
-	private _activeWindowId: number | undefined;
-
-	constructor(@IWindowsService windowsService: IWindowsService) {
-		const onActiveWindowChange = Event.latch(Event.any(windowsService.onWindowOpen, windowsService.onWindowFocus));
-		onActiveWindowChange(this.setActiveWindow, this, this.disposables);
-
-		this.firstActiveWindowIdPromise = windowsService.getActiveWindowId()
-			.then(id => (typeof this._activeWindowId === 'undefined') && this.setActiveWindow(id));
-	}
-
-	private setActiveWindow(windowId: number | undefined) {
-		if (this.firstActiveWindowIdPromise) {
-			this.firstActiveWindowIdPromise = null;
-		}
-
-		this._activeWindowId = windowId;
-	}
-
-	getActiveClientId(): Promise<string> {
-		if (this.firstActiveWindowIdPromise) {
-			return this.firstActiveWindowIdPromise;
-		}
-
-		return Promise.resolve(`window:${this._activeWindowId}`);
-	}
-
-	dispose() {
-		this.disposables = dispose(this.disposables);
-	}
+/**
+ * According to Electron docs: `scale := 1.2 ^ level`.
+ * https://github.com/electron/electron/blob/master/docs/api/web-contents.md#contentssetzoomlevellevel
+ */
+export function zoomLevelToZoomFactor(zoomLevel = 0): number {
+	return Math.pow(1.2, zoomLevel);
 }

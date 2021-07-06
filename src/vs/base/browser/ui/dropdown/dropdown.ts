@@ -5,15 +5,15 @@
 
 import 'vs/css!./dropdown';
 import { Gesture, EventType as GestureEventType } from 'vs/base/browser/touch';
-import { ActionRunner, IAction, IActionRunner } from 'vs/base/common/actions';
-import { BaseActionItem, IActionItemProvider } from 'vs/base/browser/ui/actionbar/actionbar';
+import { ActionRunner, IAction } from 'vs/base/common/actions';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { IContextViewProvider, IAnchor, AnchorAlignment } from 'vs/base/browser/ui/contextview/contextview';
 import { IMenuOptions } from 'vs/base/browser/ui/menu/menu';
-import { ResolvedKeybinding, KeyCode } from 'vs/base/common/keyCodes';
-import { EventHelper, EventType, removeClass, addClass, append, $, addDisposableListener, addClasses } from 'vs/base/browser/dom';
-import { IContextMenuDelegate } from 'vs/base/browser/contextmenu';
+import { KeyCode } from 'vs/base/common/keyCodes';
+import { EventHelper, EventType, append, $, addDisposableListener, DOMEvent } from 'vs/base/browser/dom';
+import { IContextMenuProvider } from 'vs/base/browser/contextmenu';
 import { StandardKeyboardEvent } from 'vs/base/browser/keyboardEvent';
+import { Emitter } from 'vs/base/common/event';
 
 export interface ILabelRenderer {
 	(container: HTMLElement): IDisposable | null;
@@ -29,7 +29,10 @@ export class BaseDropdown extends ActionRunner {
 	private boxContainer?: HTMLElement;
 	private _label?: HTMLElement;
 	private contents?: HTMLElement;
-	private visible: boolean;
+
+	private visible: boolean | undefined;
+	private _onDidChangeVisibility = new Emitter<boolean>();
+	readonly onDidChangeVisibility = this._onDidChangeVisibility.event;
 
 	constructor(container: HTMLElement, options: IBaseDropdownOptions) {
 		super();
@@ -48,13 +51,13 @@ export class BaseDropdown extends ActionRunner {
 		}
 
 		for (const event of [EventType.CLICK, EventType.MOUSE_DOWN, GestureEventType.Tap]) {
-			this._register(addDisposableListener(this._label, event, e => EventHelper.stop(e, true))); // prevent default click behaviour to trigger
+			this._register(addDisposableListener(this.element, event, e => EventHelper.stop(e, true))); // prevent default click behaviour to trigger
 		}
 
 		for (const event of [EventType.MOUSE_DOWN, GestureEventType.Tap]) {
 			this._register(addDisposableListener(this._label, event, e => {
 				if (e instanceof MouseEvent && e.detail > 1) {
-					return; // prevent multiple clicks to open multiple context menus (https://github.com/Microsoft/vscode/issues/41363)
+					return; // prevent multiple clicks to open multiple context menus (https://github.com/microsoft/vscode/issues/41363)
 				}
 
 				if (this.visible) {
@@ -68,7 +71,7 @@ export class BaseDropdown extends ActionRunner {
 		this._register(addDisposableListener(this._label, EventType.KEY_UP, e => {
 			const event = new StandardKeyboardEvent(e);
 			if (event.equals(KeyCode.Enter) || event.equals(KeyCode.Space)) {
-				EventHelper.stop(e, true); // https://github.com/Microsoft/vscode/issues/57997
+				EventHelper.stop(e, true); // https://github.com/microsoft/vscode/issues/57997
 
 				if (this.visible) {
 					this.hide();
@@ -83,7 +86,7 @@ export class BaseDropdown extends ActionRunner {
 			this._register(cleanupFn);
 		}
 
-		Gesture.addTarget(this._label);
+		this._register(Gesture.addTarget(this._label));
 	}
 
 	get element(): HTMLElement {
@@ -101,18 +104,28 @@ export class BaseDropdown extends ActionRunner {
 	}
 
 	show(): void {
-		this.visible = true;
+		if (!this.visible) {
+			this.visible = true;
+			this._onDidChangeVisibility.fire(true);
+		}
 	}
 
 	hide(): void {
-		this.visible = false;
+		if (this.visible) {
+			this.visible = false;
+			this._onDidChangeVisibility.fire(false);
+		}
 	}
 
-	protected onEvent(e: Event, activeElement: HTMLElement): void {
+	isVisible(): boolean {
+		return !!this.visible;
+	}
+
+	protected onEvent(e: DOMEvent, activeElement: HTMLElement): void {
 		this.hide();
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		super.dispose();
 		this.hide();
 
@@ -146,10 +159,10 @@ export class Dropdown extends BaseDropdown {
 		this.contextViewProvider = options.contextViewProvider;
 	}
 
-	show(): void {
+	override show(): void {
 		super.show();
 
-		addClass(this.element, 'active');
+		this.element.classList.add('active');
 
 		this.contextViewProvider.showContextView({
 			getAnchor: () => this.getAnchor(),
@@ -171,10 +184,10 @@ export class Dropdown extends BaseDropdown {
 	}
 
 	protected onHide(): void {
-		removeClass(this.element, 'active');
+		this.element.classList.remove('active');
 	}
 
-	hide(): void {
+	override hide(): void {
 		super.hide();
 
 		if (this.contextViewProvider) {
@@ -187,27 +200,25 @@ export class Dropdown extends BaseDropdown {
 	}
 }
 
-export interface IContextMenuProvider {
-	showContextMenu(delegate: IContextMenuDelegate): void;
-}
-
 export interface IActionProvider {
-	getActions(): IAction[];
+	getActions(): readonly IAction[];
 }
 
 export interface IDropdownMenuOptions extends IBaseDropdownOptions {
 	contextMenuProvider: IContextMenuProvider;
-	actions?: IAction[];
-	actionProvider?: IActionProvider;
+	readonly actions?: IAction[];
+	readonly actionProvider?: IActionProvider;
 	menuClassName?: string;
+	menuAsChild?: boolean; // scope down for #99448
 }
 
 export class DropdownMenu extends BaseDropdown {
 	private _contextMenuProvider: IContextMenuProvider;
-	private _menuOptions: IMenuOptions;
-	private _actions: IAction[];
+	private _menuOptions: IMenuOptions | undefined;
+	private _actions: readonly IAction[] = [];
 	private actionProvider?: IActionProvider;
 	private menuClassName: string;
+	private menuAsChild?: boolean;
 
 	constructor(container: HTMLElement, options: IDropdownMenuOptions) {
 		super(container, options);
@@ -216,17 +227,18 @@ export class DropdownMenu extends BaseDropdown {
 		this.actions = options.actions || [];
 		this.actionProvider = options.actionProvider;
 		this.menuClassName = options.menuClassName || '';
+		this.menuAsChild = !!options.menuAsChild;
 	}
 
-	set menuOptions(options: IMenuOptions) {
+	set menuOptions(options: IMenuOptions | undefined) {
 		this._menuOptions = options;
 	}
 
-	get menuOptions(): IMenuOptions {
+	get menuOptions(): IMenuOptions | undefined {
 		return this._menuOptions;
 	}
 
-	private get actions(): IAction[] {
+	private get actions(): readonly IAction[] {
 		if (this.actionProvider) {
 			return this.actionProvider.getActions();
 		}
@@ -234,118 +246,35 @@ export class DropdownMenu extends BaseDropdown {
 		return this._actions;
 	}
 
-	private set actions(actions: IAction[]) {
+	private set actions(actions: readonly IAction[]) {
 		this._actions = actions;
 	}
 
-	show(): void {
+	override show(): void {
 		super.show();
 
-		addClass(this.element, 'active');
+		this.element.classList.add('active');
 
 		this._contextMenuProvider.showContextMenu({
 			getAnchor: () => this.element,
 			getActions: () => this.actions,
 			getActionsContext: () => this.menuOptions ? this.menuOptions.context : null,
-			getActionItem: action => this.menuOptions && this.menuOptions.actionItemProvider ? this.menuOptions.actionItemProvider(action) : null,
+			getActionViewItem: action => this.menuOptions && this.menuOptions.actionViewItemProvider ? this.menuOptions.actionViewItemProvider(action) : undefined,
 			getKeyBinding: action => this.menuOptions && this.menuOptions.getKeyBinding ? this.menuOptions.getKeyBinding(action) : undefined,
 			getMenuClassName: () => this.menuClassName,
 			onHide: () => this.onHide(),
 			actionRunner: this.menuOptions ? this.menuOptions.actionRunner : undefined,
-			anchorAlignment: this.menuOptions.anchorAlignment
+			anchorAlignment: this.menuOptions ? this.menuOptions.anchorAlignment : AnchorAlignment.LEFT,
+			domForShadowRoot: this.menuAsChild ? this.element : undefined
 		});
 	}
 
-	hide(): void {
+	override hide(): void {
 		super.hide();
 	}
 
 	private onHide(): void {
 		this.hide();
-		removeClass(this.element, 'active');
-	}
-}
-
-export class DropdownMenuActionItem extends BaseActionItem {
-	private menuActionsOrProvider: any;
-	private dropdownMenu: DropdownMenu;
-	private contextMenuProvider: IContextMenuProvider;
-	private actionItemProvider?: IActionItemProvider;
-	private keybindings?: (action: IAction) => ResolvedKeybinding | undefined;
-	private clazz: string;
-	private anchorAlignmentProvider: (() => AnchorAlignment) | undefined;
-
-	constructor(action: IAction, menuActions: IAction[], contextMenuProvider: IContextMenuProvider, actionItemProvider: IActionItemProvider | undefined, actionRunner: IActionRunner, keybindings: ((action: IAction) => ResolvedKeybinding | undefined) | undefined, clazz: string, anchorAlignmentProvider?: () => AnchorAlignment);
-	constructor(action: IAction, actionProvider: IActionProvider, contextMenuProvider: IContextMenuProvider, actionItemProvider: IActionItemProvider | undefined, actionRunner: IActionRunner, keybindings: ((action: IAction) => ResolvedKeybinding) | undefined, clazz: string, anchorAlignmentProvider?: () => AnchorAlignment);
-	constructor(action: IAction, menuActionsOrProvider: any, contextMenuProvider: IContextMenuProvider, actionItemProvider: IActionItemProvider | undefined, actionRunner: IActionRunner, keybindings: ((action: IAction) => ResolvedKeybinding | undefined) | undefined, clazz: string, anchorAlignmentProvider?: () => AnchorAlignment) {
-		super(null, action);
-
-		this.menuActionsOrProvider = menuActionsOrProvider;
-		this.contextMenuProvider = contextMenuProvider;
-		this.actionItemProvider = actionItemProvider;
-		this.actionRunner = actionRunner;
-		this.keybindings = keybindings;
-		this.clazz = clazz;
-		this.anchorAlignmentProvider = anchorAlignmentProvider;
-	}
-
-	render(container: HTMLElement): void {
-		const labelRenderer: ILabelRenderer = (el: HTMLElement): IDisposable | null => {
-			this.element = append(el, $('a.action-label.icon'));
-			addClasses(this.element, this.clazz);
-
-			this.element.tabIndex = 0;
-			this.element.setAttribute('role', 'button');
-			this.element.setAttribute('aria-haspopup', 'true');
-			this.element.title = this._action.label || '';
-
-			return null;
-		};
-
-		const options: IDropdownMenuOptions = {
-			contextMenuProvider: this.contextMenuProvider,
-			labelRenderer: labelRenderer
-		};
-
-		// Render the DropdownMenu around a simple action to toggle it
-		if (Array.isArray(this.menuActionsOrProvider)) {
-			options.actions = this.menuActionsOrProvider;
-		} else {
-			options.actionProvider = this.menuActionsOrProvider;
-		}
-
-		this.dropdownMenu = this._register(new DropdownMenu(container, options));
-
-		this.dropdownMenu.menuOptions = {
-			actionItemProvider: this.actionItemProvider,
-			actionRunner: this.actionRunner,
-			getKeyBinding: this.keybindings,
-			context: this._context
-		};
-
-		if (this.anchorAlignmentProvider) {
-			const that = this;
-
-			this.dropdownMenu.menuOptions = {
-				...this.dropdownMenu.menuOptions,
-				get anchorAlignment(): AnchorAlignment {
-					return that.anchorAlignmentProvider!();
-				}
-			};
-		}
-	}
-
-	setActionContext(newContext: any): void {
-		super.setActionContext(newContext);
-
-		if (this.dropdownMenu) {
-			this.dropdownMenu.menuOptions.context = newContext;
-		}
-	}
-
-	show(): void {
-		if (this.dropdownMenu) {
-			this.dropdownMenu.show();
-		}
+		this.element.classList.remove('active');
 	}
 }

@@ -2,56 +2,59 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-
-import * as nls from 'vs/nls';
 import { ITerminalInstanceService } from 'vs/workbench/contrib/terminal/browser/terminal';
-import { Terminal as XTermTerminal } from 'vscode-xterm';
-import { ITerminalInstance, IWindowsShellHelper, ITerminalConfigHelper, ITerminalProcessManager, IShellLaunchConfig, ITerminalChildProcess } from 'vs/workbench/contrib/terminal/common/terminal';
-import { WindowsShellHelper } from 'vs/workbench/contrib/terminal/node/windowsShellHelper';
-import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
-import { TerminalProcessManager } from 'vs/workbench/contrib/terminal/browser/terminalProcessManager';
+import { Disposable } from 'vs/base/common/lifecycle';
 import { IProcessEnvironment } from 'vs/base/common/platform';
-import { TerminalProcess } from 'vs/workbench/contrib/terminal/node/terminalProcess';
+import { getMainProcessParentEnv } from 'vs/workbench/contrib/terminal/node/terminalEnvironment';
+import type { Terminal as XTermTerminal } from 'xterm';
+import type { SearchAddon as XTermSearchAddon } from 'xterm-addon-search';
+import type { Unicode11Addon as XTermUnicode11Addon } from 'xterm-addon-unicode11';
+import type { WebglAddon as XTermWebglAddon } from 'xterm-addon-webgl';
+import { IShellEnvironmentService } from 'vs/workbench/services/environment/electron-sandbox/shellEnvironmentService';
 
 let Terminal: typeof XTermTerminal;
+let SearchAddon: typeof XTermSearchAddon;
+let Unicode11Addon: typeof XTermUnicode11Addon;
+let WebglAddon: typeof XTermWebglAddon;
 
-/**
- * A service used by TerminalInstance (and components owned by it) that allows it to break its
- * dependency on electron-browser and node layers, while at the same time avoiding a cyclic
- * dependency on ITerminalService.
- */
-export class TerminalInstanceService implements ITerminalInstanceService {
-	public _serviceBrand: any;
+export class TerminalInstanceService extends Disposable implements ITerminalInstanceService {
+	public _serviceBrand: undefined;
 
 	constructor(
-		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@IShellEnvironmentService private readonly _shellEnvironmentService: IShellEnvironmentService
 	) {
+		super();
 	}
 
 	public async getXtermConstructor(): Promise<typeof XTermTerminal> {
 		if (!Terminal) {
-			Terminal = (await import('vscode-xterm')).Terminal;
-			// Enable xterm.js addons
-			Terminal.applyAddon(require.__$__nodeRequire('vscode-xterm/lib/addons/search/search'));
-			Terminal.applyAddon(require.__$__nodeRequire('vscode-xterm/lib/addons/webLinks/webLinks'));
-			Terminal.applyAddon(require.__$__nodeRequire('vscode-xterm/lib/addons/winptyCompat/winptyCompat'));
-			// Localize strings
-			Terminal.strings.blankLine = nls.localize('terminal.integrated.a11yBlankLine', 'Blank line');
-			Terminal.strings.promptLabel = nls.localize('terminal.integrated.a11yPromptLabel', 'Terminal input');
-			Terminal.strings.tooMuchOutput = nls.localize('terminal.integrated.a11yTooMuchOutput', 'Too much output to announce, navigate to rows manually to read');
+			Terminal = (await import('xterm')).Terminal;
 		}
 		return Terminal;
 	}
 
-	public createWindowsShellHelper(shellProcessId: number, instance: ITerminalInstance, xterm: XTermTerminal): IWindowsShellHelper {
-		return new WindowsShellHelper(shellProcessId, instance, xterm);
+	public async getXtermSearchConstructor(): Promise<typeof XTermSearchAddon> {
+		if (!SearchAddon) {
+			SearchAddon = (await import('xterm-addon-search')).SearchAddon;
+		}
+		return SearchAddon;
 	}
 
-	public createTerminalProcessManager(id: number, configHelper: ITerminalConfigHelper): ITerminalProcessManager {
-		return this._instantiationService.createInstance(TerminalProcessManager, id, configHelper);
+	public async getXtermUnicode11Constructor(): Promise<typeof XTermUnicode11Addon> {
+		if (!Unicode11Addon) {
+			Unicode11Addon = (await import('xterm-addon-unicode11')).Unicode11Addon;
+		}
+		return Unicode11Addon;
 	}
 
-	public createTerminalProcess(shellLaunchConfig: IShellLaunchConfig, cwd: string, cols: number, rows: number, env: IProcessEnvironment, windowsEnableConpty: boolean): ITerminalChildProcess {
-		return new TerminalProcess(shellLaunchConfig, cwd, cols, rows, env, windowsEnableConpty);
+	public async getXtermWebglConstructor(): Promise<typeof XTermWebglAddon> {
+		if (!WebglAddon) {
+			WebglAddon = (await import('xterm-addon-webgl')).WebglAddon;
+		}
+		return WebglAddon;
+	}
+
+	public async getMainProcessParentEnv(): Promise<IProcessEnvironment> {
+		return getMainProcessParentEnv(await this._shellEnvironmentService.getShellEnv());
 	}
 }

@@ -4,63 +4,70 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
-import { IExtensionService, IResponsiveStateChangeEvent, ICpuProfilerTarget, IExtensionHostProfile, ProfileSession } from 'vs/workbench/services/extensions/common/extensions';
+import { IExtensionService, IResponsiveStateChangeEvent, IExtensionHostProfile, ProfileSession } from 'vs/workbench/services/extensions/common/extensions';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { Disposable } from 'vs/base/common/lifecycle';
 import { ILogService } from 'vs/platform/log/common/log';
 import { CancellationTokenSource } from 'vs/base/common/cancellation';
 import { onUnexpectedError } from 'vs/base/common/errors';
-import { tmpdir } from 'os';
-import { join } from 'vs/base/common/path';
-import { writeFile } from 'vs/base/node/pfs';
-import { IExtensionHostProfileService, ReportExtensionIssueAction } from 'vs/workbench/contrib/extensions/electron-browser/runtimeExtensionsEditor';
+import { joinPath } from 'vs/base/common/resources';
+import { IExtensionHostProfileService } from 'vs/workbench/contrib/extensions/electron-browser/runtimeExtensionsEditor';
 import { INotificationService, Severity } from 'vs/platform/notification/common/notification';
 import { localize } from 'vs/nls';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
-import { RuntimeExtensionsInput } from 'vs/workbench/contrib/extensions/electron-browser/runtimeExtensionsInput';
-import { generateUuid } from 'vs/base/common/uuid';
-import { IExtensionsWorkbenchService } from 'vs/workbench/contrib/extensions/common/extensions';
+import { RuntimeExtensionsInput } from 'vs/workbench/contrib/extensions/common/runtimeExtensionsInput';
 import { ExtensionIdentifier } from 'vs/platform/extensions/common/extensions';
+import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
+import { createSlowExtensionAction } from 'vs/workbench/contrib/extensions/electron-browser/extensionsSlowActions';
+import { ExtensionHostProfiler } from 'vs/workbench/services/extensions/electron-browser/extensionHostProfiler';
+import { INativeWorkbenchEnvironmentService } from 'vs/workbench/services/environment/electron-sandbox/environmentService';
+import { IFileService } from 'vs/platform/files/common/files';
+import { VSBuffer } from 'vs/base/common/buffer';
 
 export class ExtensionsAutoProfiler extends Disposable implements IWorkbenchContribution {
 
-	private readonly _session = new Map<ICpuProfilerTarget, CancellationTokenSource>();
 	private readonly _blame = new Set<string>();
+	private _session: CancellationTokenSource | undefined;
 
 	constructor(
 		@IExtensionService private readonly _extensionService: IExtensionService,
 		@IExtensionHostProfileService private readonly _extensionProfileService: IExtensionHostProfileService,
-		@IExtensionsWorkbenchService private readonly _anotherExtensionService: IExtensionsWorkbenchService,
 		@ITelemetryService private readonly _telemetryService: ITelemetryService,
 		@ILogService private readonly _logService: ILogService,
 		@INotificationService private readonly _notificationService: INotificationService,
 		@IEditorService private readonly _editorService: IEditorService,
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@INativeWorkbenchEnvironmentService private readonly _environmentServie: INativeWorkbenchEnvironmentService,
+		@IFileService private readonly _fileService: IFileService
 	) {
 		super();
 		this._register(_extensionService.onDidChangeResponsiveChange(this._onDidChangeResponsiveChange, this));
 	}
 
 	private async _onDidChangeResponsiveChange(event: IResponsiveStateChangeEvent): Promise<void> {
-		const { target } = event;
 
-		if (!target.canProfileExtensionHost()) {
+		const port = await this._extensionService.getInspectPort(true);
+
+		if (!port) {
 			return;
 		}
 
-		if (event.isResponsive && this._session.has(target)) {
+		if (event.isResponsive && this._session) {
 			// stop profiling when responsive again
-			this._session.get(target).cancel();
+			this._session.cancel();
 
-		} else if (!event.isResponsive && !this._session.has(target)) {
+		} else if (!event.isResponsive && !this._session) {
 			// start profiling if not yet profiling
-			const token = new CancellationTokenSource();
-			this._session.set(target, token);
+			const cts = new CancellationTokenSource();
+			this._session = cts;
+
 
 			let session: ProfileSession;
 			try {
-				session = await target.startExtensionHostProfile();
+				session = await this._instantiationService.createInstance(ExtensionHostProfiler, port).start();
+
 			} catch (err) {
-				this._session.delete(target);
+				this._session = undefined;
 				// fail silent as this is often
 				// caused by another party being
 				// connected already
@@ -69,7 +76,7 @@ export class ExtensionsAutoProfiler extends Disposable implements IWorkbenchCont
 
 			// wait 5 seconds or until responsive again
 			await new Promise(resolve => {
-				token.token.onCancellationRequested(resolve);
+				cts.token.onCancellationRequested(resolve);
 				setTimeout(resolve, 5e3);
 			});
 
@@ -79,7 +86,7 @@ export class ExtensionsAutoProfiler extends Disposable implements IWorkbenchCont
 			} catch (err) {
 				onUnexpectedError(err);
 			} finally {
-				this._session.delete(target);
+				this._session = undefined;
 			}
 		}
 	}
@@ -132,16 +139,12 @@ export class ExtensionsAutoProfiler extends Disposable implements IWorkbenchCont
 			return;
 		}
 
-		// add to running extensions view
-		this._extensionProfileService.setUnresponsiveProfile(extension.identifier, profile);
 
 		// print message to log
-		const path = join(tmpdir(), `exthost-${Math.random().toString(16).slice(2, 8)}.cpuprofile`);
-		await writeFile(path, JSON.stringify(profile.data));
+		const path = joinPath(this._environmentServie.tmpDir, `exthost-${Math.random().toString(16).slice(2, 8)}.cpuprofile`);
+		await this._fileService.writeFile(path, VSBuffer.fromString(JSON.stringify(profile.data)));
 		this._logService.warn(`UNRESPONSIVE extension host, '${top.id}' took ${top!.percentage}% of ${duration / 1e3}ms, saved PROFILE here: '${path}'`, data);
 
-		// send telemetry
-		const id = generateUuid();
 
 		/* __GDPR__
 			"exthostunresponsive" : {
@@ -151,24 +154,22 @@ export class ExtensionsAutoProfiler extends Disposable implements IWorkbenchCont
 			}
 		*/
 		this._telemetryService.publicLog('exthostunresponsive', {
-			id,
 			duration,
 			data,
 		});
+
+		// add to running extensions view
+		this._extensionProfileService.setUnresponsiveProfile(extension.identifier, profile);
 
 		// prompt: when really slow/greedy
 		if (!(top.percentage >= 99 && top.total >= 5e6)) {
 			return;
 		}
 
-		// prompt: only when you can file an issue
-		const reportAction = new ReportExtensionIssueAction({
-			marketplaceInfo: this._anotherExtensionService.local.filter(value => ExtensionIdentifier.equals(value.identifier.id, extension.identifier))[0],
-			description: extension,
-			unresponsiveProfile: profile,
-			status: undefined,
-		});
-		if (!reportAction.enabled) {
+		const action = await this._instantiationService.invokeFunction(createSlowExtensionAction, extension, profile);
+
+		if (!action) {
+			// cannot report issues against this extension...
 			return;
 		}
 
@@ -188,20 +189,10 @@ export class ExtensionsAutoProfiler extends Disposable implements IWorkbenchCont
 			),
 			[{
 				label: localize('show', 'Show Extensions'),
-				run: () => this._editorService.openEditor(new RuntimeExtensionsInput())
+				run: () => this._editorService.openEditor(RuntimeExtensionsInput.instance, { pinned: true })
 			},
-			{
-				label: localize('report', "Report Issue"),
-				run: () => {
-					/* __GDPR__
-						"exthostunresponsive/report" : {
-							"id" : { "classification": "SystemMetaData", "purpose": "PerformanceAndHealth" }
-						}
-					*/
-					this._telemetryService.publicLog('exthostunresponsive/report', { id });
-					return reportAction.run();
-				}
-			}],
+				action
+			],
 			{ silent: true }
 		);
 	}

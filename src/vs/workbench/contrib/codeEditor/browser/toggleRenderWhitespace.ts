@@ -6,15 +6,15 @@
 import * as nls from 'vs/nls';
 import { Action } from 'vs/base/common/actions';
 import { MenuId, MenuRegistry, SyncActionDescriptor } from 'vs/platform/actions/common/actions';
-import { ConfigurationTarget, IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
 import { Registry } from 'vs/platform/registry/common/platform';
-import { Extensions as ActionExtensions, IWorkbenchActionRegistry } from 'vs/workbench/common/actions';
+import { CATEGORIES, Extensions as ActionExtensions, IWorkbenchActionRegistry } from 'vs/workbench/common/actions';
 
 export class ToggleRenderWhitespaceAction extends Action {
 
 	public static readonly ID = 'editor.action.toggleRenderWhitespace';
-	public static readonly LABEL = nls.localize('toggleRenderWhitespace', "View: Toggle Render Whitespace");
+	public static readonly LABEL = nls.localize('toggleRenderWhitespace', "Toggle Render Whitespace");
 
 	constructor(
 		id: string,
@@ -24,7 +24,7 @@ export class ToggleRenderWhitespaceAction extends Action {
 		super(id, label);
 	}
 
-	public run(): Promise<any> {
+	public override run(): Promise<any> {
 		const renderWhitespace = this._configurationService.getValue<string>('editor.renderWhitespace');
 
 		let newRenderWhitespace: string;
@@ -34,19 +34,19 @@ export class ToggleRenderWhitespaceAction extends Action {
 			newRenderWhitespace = 'none';
 		}
 
-		return this._configurationService.updateValue('editor.renderWhitespace', newRenderWhitespace, ConfigurationTarget.USER);
+		return this._configurationService.updateValue('editor.renderWhitespace', newRenderWhitespace);
 	}
 }
 
 const registry = Registry.as<IWorkbenchActionRegistry>(ActionExtensions.WorkbenchActions);
-registry.registerWorkbenchAction(new SyncActionDescriptor(ToggleRenderWhitespaceAction, ToggleRenderWhitespaceAction.ID, ToggleRenderWhitespaceAction.LABEL), 'View: Toggle Render Whitespace');
+registry.registerWorkbenchAction(SyncActionDescriptor.from(ToggleRenderWhitespaceAction), 'View: Toggle Render Whitespace', CATEGORIES.View.value);
 
 MenuRegistry.appendMenuItem(MenuId.MenubarViewMenu, {
 	group: '5_editor',
 	command: {
 		id: ToggleRenderWhitespaceAction.ID,
-		title: nls.localize({ key: 'miToggleRenderWhitespace', comment: ['&& denotes a mnemonic'] }, "Toggle &&Render Whitespace"),
+		title: nls.localize({ key: 'miToggleRenderWhitespace', comment: ['&& denotes a mnemonic'] }, "&&Render Whitespace"),
 		toggled: ContextKeyExpr.notEquals('config.editor.renderWhitespace', 'none')
 	},
-	order: 3
+	order: 4
 });

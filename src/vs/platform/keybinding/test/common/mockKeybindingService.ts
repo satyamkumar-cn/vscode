@@ -6,7 +6,7 @@
 import { Event } from 'vs/base/common/event';
 import { Keybinding, ResolvedKeybinding, SimpleKeybinding } from 'vs/base/common/keyCodes';
 import { OS } from 'vs/base/common/platform';
-import { ContextKeyExpr, IContextKey, IContextKeyChangeEvent, IContextKeyService, IContextKeyServiceTarget } from 'vs/platform/contextkey/common/contextkey';
+import { IContextKey, IContextKeyChangeEvent, IContextKeyService, IContextKeyServiceTarget, ContextKeyExpression } from 'vs/platform/contextkey/common/contextkey';
 import { IKeybindingEvent, IKeybindingService, IKeyboardEvent } from 'vs/platform/keybinding/common/keybinding';
 import { IResolveResult } from 'vs/platform/keybinding/common/keybindingResolver';
 import { ResolvedKeybindingItem } from 'vs/platform/keybinding/common/resolvedKeybindingItem';
@@ -36,7 +36,7 @@ class MockKeybindingContextKey<T> implements IContextKey<T> {
 
 export class MockContextKeyService implements IContextKeyService {
 
-	public _serviceBrand: any;
+	public _serviceBrand: undefined;
 	private _keys = new Map<string, IContextKey<any>>();
 
 	public dispose(): void {
@@ -47,12 +47,13 @@ export class MockContextKeyService implements IContextKeyService {
 		this._keys.set(key, ret);
 		return ret;
 	}
-	public contextMatchesRules(rules: ContextKeyExpr): boolean {
+	public contextMatchesRules(rules: ContextKeyExpression): boolean {
 		return false;
 	}
 	public get onDidChangeContext(): Event<IContextKeyChangeEvent> {
 		return Event.None;
 	}
+	public bufferChangeEvents(callback: () => void) { callback(); }
 	public getContextKeyValue(key: string) {
 		const value = this._keys.get(key);
 		if (value) {
@@ -65,10 +66,27 @@ export class MockContextKeyService implements IContextKeyService {
 	public createScoped(domNode: HTMLElement): IContextKeyService {
 		return this;
 	}
+	public createOverlay(): IContextKeyService {
+		return this;
+	}
+	updateParent(_parentContextKeyService: IContextKeyService): void {
+		// no-op
+	}
+}
+
+export class MockScopableContextKeyService extends MockContextKeyService {
+	/**
+	 * Don't implement this for all tests since we rarely depend on this behavior and it isn't implemented fully
+	 */
+	public override createScoped(domNote: HTMLElement): IContextKeyService {
+		return new MockContextKeyService();
+	}
 }
 
 export class MockKeybindingService implements IKeybindingService {
-	public _serviceBrand: any;
+	public _serviceBrand: undefined;
+
+	public readonly inChordMode: boolean = false;
 
 	public get onDidUpdateKeybindings(): Event<IKeybindingEvent> {
 		return Event.None;
@@ -133,7 +151,19 @@ export class MockKeybindingService implements IKeybindingService {
 		return false;
 	}
 
+	public toggleLogging(): boolean {
+		return false;
+	}
+
 	public _dumpDebugInfo(): string {
 		return '';
+	}
+
+	public _dumpDebugInfoJSON(): string {
+		return '';
+	}
+
+	public registerSchemaContribution() {
+		// noop
 	}
 }

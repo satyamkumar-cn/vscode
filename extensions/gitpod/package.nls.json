@@ -1,0 +1,14 @@
+{
+	"displayName": "DevSpaces",
+	"description": "DevSpaces Integration Support",
+	"openDashboard": "DevSpaces: Open Dashboard",
+	"openAccessControl": "DevSpaces: Open Access Control",
+	"openSettings": "DevSpaces: Open Settings",
+	"openContext": "DevSpaces: Open Context",
+	"stopWorkspace": "DevSpaces: Stop Workspace",
+	"openBrowser": "Open Browser",
+	"openPreview": "Open Preview",
+	"makePrivate": "Make Private",
+	"makePublic": "Make Public",
+	"addToConfig": "Add to .gitpod.yml"
+}

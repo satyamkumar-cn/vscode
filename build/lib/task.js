@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.define = exports.parallel = exports.series = void 0;
 const fancyLog = require("fancy-log");
 const ansiColors = require("ansi-colors");
 function _isPromise(p) {
@@ -32,7 +33,7 @@ async function _doExecute(task) {
     // Always invoke as if it were a callback task
     return new Promise((resolve, reject) => {
         if (task.length === 1) {
-            // this is a calback task
+            // this is a callback task
             task((err) => {
                 if (err) {
                     return reject(err);

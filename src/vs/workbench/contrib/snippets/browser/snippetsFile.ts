@@ -3,9 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { parse as jsonParse } from 'vs/base/common/json';
+import { parse as jsonParse, getNodeType } from 'vs/base/common/json';
 import { forEach } from 'vs/base/common/collections';
-import { IExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
 import { localize } from 'vs/nls';
 import { extname, basename } from 'vs/base/common/path';
 import { SnippetParser, Variable, Placeholder, Text } from 'vs/editor/contrib/snippet/snippetParser';
@@ -13,11 +12,72 @@ import { KnownSnippetVariableNames } from 'vs/editor/contrib/snippet/snippetVari
 import { isFalsyOrWhitespace } from 'vs/base/common/strings';
 import { URI } from 'vs/base/common/uri';
 import { IFileService } from 'vs/platform/files/common/files';
+import { IExtensionDescription } from 'vs/platform/extensions/common/extensions';
+import { IdleValue } from 'vs/base/common/async';
+import { IExtensionResourceLoaderService } from 'vs/workbench/services/extensionResourceLoader/common/extensionResourceLoader';
+import { relativePath } from 'vs/base/common/resources';
+import { isObject } from 'vs/base/common/types';
+import { Iterable } from 'vs/base/common/iterator';
+
+class SnippetBodyInsights {
+
+	readonly codeSnippet: string;
+	readonly isBogous: boolean;
+	readonly needsClipboard: boolean;
+
+	constructor(body: string) {
+
+		// init with defaults
+		this.isBogous = false;
+		this.needsClipboard = false;
+		this.codeSnippet = body;
+
+		// check snippet...
+		const textmateSnippet = new SnippetParser().parse(body, false);
+
+		let placeholders = new Map<string, number>();
+		let placeholderMax = 0;
+		for (const placeholder of textmateSnippet.placeholders) {
+			placeholderMax = Math.max(placeholderMax, placeholder.index);
+		}
+
+		let stack = [...textmateSnippet.children];
+		while (stack.length > 0) {
+			const marker = stack.shift()!;
+			if (marker instanceof Variable) {
+
+				if (marker.children.length === 0 && !KnownSnippetVariableNames[marker.name]) {
+					// a 'variable' without a default value and not being one of our supported
+					// variables is automatically turned into a placeholder. This is to restore
+					// a bug we had before. So `${foo}` becomes `${N:foo}`
+					const index = placeholders.has(marker.name) ? placeholders.get(marker.name)! : ++placeholderMax;
+					placeholders.set(marker.name, index);
+
+					const synthetic = new Placeholder(index).appendChild(new Text(marker.name));
+					textmateSnippet.replace(marker, [synthetic]);
+					this.isBogous = true;
+				}
+
+				if (marker.name === 'CLIPBOARD') {
+					this.needsClipboard = true;
+				}
+
+			} else {
+				// recurse
+				stack.push(...marker.children);
+			}
+		}
+
+		if (this.isBogous) {
+			this.codeSnippet = textmateSnippet.toTextmateString();
+		}
+
+	}
+}
 
 export class Snippet {
 
-	private _codeSnippet: string;
-	private _isBogous: boolean;
+	private readonly _bodyInsights: IdleValue<SnippetBodyInsights>;
 
 	readonly prefixLow: string;
 
@@ -29,32 +89,22 @@ export class Snippet {
 		readonly body: string,
 		readonly source: string,
 		readonly snippetSource: SnippetSource,
+		readonly snippetIdentifier?: string
 	) {
-		//
-		this.prefixLow = prefix ? prefix.toLowerCase() : prefix;
+		this.prefixLow = prefix.toLowerCase();
+		this._bodyInsights = new IdleValue(() => new SnippetBodyInsights(this.body));
 	}
 
 	get codeSnippet(): string {
-		this._ensureCodeSnippet();
-		return this._codeSnippet;
+		return this._bodyInsights.value.codeSnippet;
 	}
 
 	get isBogous(): boolean {
-		this._ensureCodeSnippet();
-		return this._isBogous;
+		return this._bodyInsights.value.isBogous;
 	}
 
-	private _ensureCodeSnippet() {
-		if (!this._codeSnippet) {
-			const rewrite = Snippet._rewriteBogousVariables(this.body);
-			if (typeof rewrite === 'string') {
-				this._codeSnippet = rewrite;
-				this._isBogous = true;
-			} else {
-				this._codeSnippet = this.body;
-				this._isBogous = false;
-			}
-		}
+	get needsClipboard(): boolean {
+		return this._bodyInsights.value.needsClipboard;
 	}
 
 	static compare(a: Snippet, b: Snippet): number {
@@ -70,61 +120,18 @@ export class Snippet {
 			return 0;
 		}
 	}
-
-	static _rewriteBogousVariables(template: string): false | string {
-		const textmateSnippet = new SnippetParser().parse(template, false);
-
-		let placeholders = new Map<string, number>();
-		let placeholderMax = 0;
-		for (const placeholder of textmateSnippet.placeholders) {
-			placeholderMax = Math.max(placeholderMax, placeholder.index);
-		}
-
-		let didChange = false;
-		let stack = [...textmateSnippet.children];
-
-		while (stack.length > 0) {
-			const marker = stack.shift()!;
-
-			if (
-				marker instanceof Variable
-				&& marker.children.length === 0
-				&& !KnownSnippetVariableNames[marker.name]
-			) {
-				// a 'variable' without a default value and not being one of our supported
-				// variables is automatically turned into a placeholder. This is to restore
-				// a bug we had before. So `${foo}` becomes `${N:foo}`
-				const index = placeholders.has(marker.name) ? placeholders.get(marker.name)! : ++placeholderMax;
-				placeholders.set(marker.name, index);
-
-				const synthetic = new Placeholder(index).appendChild(new Text(marker.name));
-				textmateSnippet.replace(marker, [synthetic]);
-				didChange = true;
-
-			} else {
-				// recurse
-				stack.push(...marker.children);
-			}
-		}
-
-		if (!didChange) {
-			return false;
-		} else {
-			return textmateSnippet.toTextmateString();
-		}
-	}
 }
 
 
 interface JsonSerializedSnippet {
-	body: string;
+	body: string | string[];
 	scope: string;
-	prefix: string | string[];
+	prefix: string | string[] | undefined;
 	description: string;
 }
 
 function isJsonSerializedSnippet(thing: any): thing is JsonSerializedSnippet {
-	return Boolean((<JsonSerializedSnippet>thing).body) && Boolean((<JsonSerializedSnippet>thing).prefix);
+	return isObject(thing) && Boolean((<JsonSerializedSnippet>thing).body);
 }
 
 interface JsonSerializedSnippets {
@@ -150,7 +157,8 @@ export class SnippetFile {
 		readonly location: URI,
 		public defaultScopes: string[] | undefined,
 		private readonly _extension: IExtensionDescription | undefined,
-		private readonly _fileService: IFileService
+		private readonly _fileService: IFileService,
+		private readonly _extensionResourceLoaderService: IExtensionResourceLoaderService
 	) {
 		this.isGlobalSnippets = extname(location.path) === '.code-snippets';
 		this.isUserSnippets = !this._extension;
@@ -196,11 +204,20 @@ export class SnippetFile {
 		}
 	}
 
+	private async _load(): Promise<string> {
+		if (this._extension) {
+			return this._extensionResourceLoaderService.readExtensionResource(this.location);
+		} else {
+			const content = await this._fileService.readFile(this.location);
+			return content.value.toString();
+		}
+	}
+
 	load(): Promise<this> {
 		if (!this._loadPromise) {
-			this._loadPromise = Promise.resolve(this._fileService.resolveContent(this.location, { encoding: 'utf8' })).then(content => {
-				const data = <JsonSerializedSnippets>jsonParse(content.value.toString());
-				if (typeof data === 'object') {
+			this._loadPromise = Promise.resolve(this._load()).then(content => {
+				const data = <JsonSerializedSnippets>jsonParse(content);
+				if (getNodeType(data) === 'object') {
 					forEach(data, entry => {
 						const { key: name, value: scopeOrTemplate } = entry;
 						if (isJsonSerializedSnippet(scopeOrTemplate)) {
@@ -228,16 +245,19 @@ export class SnippetFile {
 
 		let { prefix, body, description } = snippet;
 
+		if (!prefix) {
+			prefix = '';
+		}
+
 		if (Array.isArray(body)) {
 			body = body.join('\n');
+		}
+		if (typeof body !== 'string') {
+			return;
 		}
 
 		if (Array.isArray(description)) {
 			description = description.join('\n');
-		}
-
-		if ((typeof prefix !== 'string' && !Array.isArray(prefix)) || typeof body !== 'string') {
-			return;
 		}
 
 		let scopes: string[];
@@ -266,17 +286,17 @@ export class SnippetFile {
 			}
 		}
 
-		let prefixes = Array.isArray(prefix) ? prefix : [prefix];
-		prefixes.forEach(p => {
+		for (const _prefix of Array.isArray(prefix) ? prefix : Iterable.single(prefix)) {
 			bucket.push(new Snippet(
 				scopes,
 				name,
-				p,
+				_prefix,
 				description,
 				body,
 				source,
-				this.source
+				this.source,
+				this._extension && `${relativePath(this._extension.extensionLocation, this.location)}/${name}`
 			));
-		});
+		}
 	}
 }

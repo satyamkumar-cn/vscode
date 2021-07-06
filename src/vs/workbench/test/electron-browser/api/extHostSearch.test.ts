@@ -2,38 +2,40 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
+
 import * as assert from 'assert';
 import { mapArrayOrNot } from 'vs/base/common/arrays';
 import { CancellationTokenSource } from 'vs/base/common/cancellation';
 import { isPromiseCanceledError } from 'vs/base/common/errors';
-import { dispose } from 'vs/base/common/lifecycle';
+import { DisposableStore } from 'vs/base/common/lifecycle';
 import { joinPath } from 'vs/base/common/resources';
 import { URI, UriComponents } from 'vs/base/common/uri';
-import * as extfs from 'vs/base/node/extfs';
+import * as pfs from 'vs/base/node/pfs';
+import { MainContext, MainThreadSearchShape } from 'vs/workbench/api/common/extHost.protocol';
+import { NativeExtHostSearch } from 'vs/workbench/api/node/extHostSearch';
+import { Range } from 'vs/workbench/api/common/extHostTypes';
 import { IFileMatch, IFileQuery, IPatternInfo, IRawFileMatch2, ISearchCompleteStats, ISearchQuery, ITextQuery, QueryType, resultIsMatch } from 'vs/workbench/services/search/common/search';
-import { MainContext, MainThreadSearchShape } from 'vs/workbench/api/node/extHost.protocol';
-import { ExtHostSearch } from 'vs/workbench/api/node/extHostSearch';
-import { Range } from 'vs/workbench/api/node/extHostTypes';
-import { extensionResultIsMatch } from 'vs/workbench/services/search/node/textSearchManager';
-import { TestRPCProtocol } from 'vs/workbench/test/electron-browser/api/testRPCProtocol';
-import { TestLogService } from 'vs/workbench/test/workbenchTestServices';
-import * as vscode from 'vscode';
+import { TestRPCProtocol } from 'vs/workbench/test/browser/api/testRPCProtocol';
+import type * as vscode from 'vscode';
+import { NullLogService } from 'vs/platform/log/common/log';
+import { URITransformerService } from 'vs/workbench/api/common/extHostUriTransformerService';
+import { mock } from 'vs/base/test/common/mock';
+import { IExtHostInitDataService } from 'vs/workbench/api/common/extHostInitDataService';
+import { TextSearchManager } from 'vs/workbench/services/search/common/textSearchManager';
+import { NativeTextSearchManager } from 'vs/workbench/services/search/node/textSearchManager';
+import { timeout } from 'vs/base/common/async';
 
 let rpcProtocol: TestRPCProtocol;
-let extHostSearch: ExtHostSearch;
-let disposables: vscode.Disposable[] = [];
+let extHostSearch: NativeExtHostSearch;
+const disposables = new DisposableStore();
 
 let mockMainThreadSearch: MockMainThreadSearch;
 class MockMainThreadSearch implements MainThreadSearchShape {
-	lastHandle: number;
+	lastHandle!: number;
 
 	results: Array<UriComponents | IRawFileMatch2> = [];
 
 	$registerFileSearchProvider(handle: number, scheme: string): void {
-		this.lastHandle = handle;
-	}
-
-	$registerFileIndexProvider(handle: number, scheme: string): void {
 		this.lastHandle = handle;
 	}
 
@@ -59,16 +61,20 @@ class MockMainThreadSearch implements MainThreadSearchShape {
 	}
 }
 
-let mockExtfs: Partial<typeof extfs>;
+let mockPFS: Partial<typeof pfs>;
+
+export function extensionResultIsMatch(data: vscode.TextSearchResult): data is vscode.TextSearchMatch {
+	return !!(<vscode.TextSearchMatch>data).preview;
+}
 
 suite('ExtHostSearch', () => {
 	async function registerTestTextSearchProvider(provider: vscode.TextSearchProvider, scheme = 'file'): Promise<void> {
-		disposables.push(extHostSearch.registerTextSearchProvider(scheme, provider));
+		disposables.add(extHostSearch.registerTextSearchProvider(scheme, provider));
 		await rpcProtocol.sync();
 	}
 
 	async function registerTestFileSearchProvider(provider: vscode.FileSearchProvider, scheme = 'file'): Promise<void> {
-		disposables.push(extHostSearch.registerFileSearchProvider(scheme, provider));
+		disposables.add(extHostSearch.registerFileSearchProvider(scheme, provider));
 		await rpcProtocol.sync();
 	}
 
@@ -78,7 +84,7 @@ suite('ExtHostSearch', () => {
 			const cancellation = new CancellationTokenSource();
 			const p = extHostSearch.$provideFileSearchResults(mockMainThreadSearch.lastHandle, 0, query, cancellation.token);
 			if (cancel) {
-				await new Promise(resolve => process.nextTick(resolve));
+				await timeout(0);
 				cancellation.cancel();
 			}
 
@@ -97,15 +103,11 @@ suite('ExtHostSearch', () => {
 		};
 	}
 
-	async function runTextSearch(query: ITextQuery, cancel = false): Promise<{ results: IFileMatch[], stats: ISearchCompleteStats }> {
+	async function runTextSearch(query: ITextQuery): Promise<{ results: IFileMatch[], stats: ISearchCompleteStats }> {
 		let stats: ISearchCompleteStats;
 		try {
 			const cancellation = new CancellationTokenSource();
 			const p = extHostSearch.$provideTextSearchResults(mockMainThreadSearch.lastHandle, 0, query, cancellation.token);
-			if (cancel) {
-				await new Promise(resolve => process.nextTick(resolve));
-				cancellation.cancel();
-			}
 
 			stats = await p;
 		} catch (err) {
@@ -130,16 +132,30 @@ suite('ExtHostSearch', () => {
 		rpcProtocol = new TestRPCProtocol();
 
 		mockMainThreadSearch = new MockMainThreadSearch();
-		const logService = new TestLogService();
+		const logService = new NullLogService();
 
 		rpcProtocol.set(MainContext.MainThreadSearch, mockMainThreadSearch);
 
-		mockExtfs = {};
-		extHostSearch = new ExtHostSearch(rpcProtocol, null!, logService, mockExtfs as typeof extfs);
+		mockPFS = {};
+		extHostSearch = new class extends NativeExtHostSearch {
+			constructor() {
+				super(
+					rpcProtocol,
+					new class extends mock<IExtHostInitDataService>() { remote = { isRemote: false, authority: undefined, connectionData: null }; },
+					new URITransformerService(null),
+					logService
+				);
+				this._pfs = mockPFS as any;
+			}
+
+			protected override createTextSearchManager(query: ITextQuery, provider: vscode.TextSearchProvider): TextSearchManager {
+				return new NativeTextSearchManager(query, provider, this._pfs);
+			}
+		};
 	});
 
 	teardown(() => {
-		dispose(disposables);
+		disposables.clear();
 		return rpcProtocol.sync();
 	});
 
@@ -164,7 +180,7 @@ suite('ExtHostSearch', () => {
 		function compareURIs(actual: URI[], expected: URI[]) {
 			const sortAndStringify = (arr: URI[]) => arr.sort().map(u => u.toString());
 
-			assert.deepEqual(
+			assert.deepStrictEqual(
 				sortAndStringify(actual),
 				sortAndStringify(expected));
 		}
@@ -185,7 +201,7 @@ suite('ExtHostSearch', () => {
 			const reportedResults = [
 				joinPath(rootFolderA, 'file1.ts'),
 				joinPath(rootFolderA, 'file2.ts'),
-				joinPath(rootFolderA, 'file3.ts')
+				joinPath(rootFolderA, 'subfolder/file3.ts')
 			];
 
 			await registerTestFileSearchProvider({
@@ -196,7 +212,7 @@ suite('ExtHostSearch', () => {
 
 			const { results, stats } = await runFileSearch(getSimpleQuery());
 			assert(!stats.limitHit);
-			assert.equal(results.length, 3);
+			assert.strictEqual(results.length, 3);
 			compareURIs(results, reportedResults);
 		});
 
@@ -204,12 +220,19 @@ suite('ExtHostSearch', () => {
 			let cancelRequested = false;
 			await registerTestFileSearchProvider({
 				provideFileSearchResults(query: vscode.FileSearchQuery, options: vscode.FileSearchOptions, token: vscode.CancellationToken): Promise<URI[]> {
+
 					return new Promise((resolve, reject) => {
-						token.onCancellationRequested(() => {
+						function onCancel() {
 							cancelRequested = true;
 
 							resolve([joinPath(options.folder, 'file1.ts')]); // or reject or nothing?
-						});
+						}
+
+						if (token.isCancellationRequested) {
+							onCancel();
+						} else {
+							token.onCancellationRequested(() => onCancel());
+						}
 					});
 				}
 			});
@@ -267,11 +290,11 @@ suite('ExtHostSearch', () => {
 			await registerTestFileSearchProvider({
 				provideFileSearchResults(query: vscode.FileSearchQuery, options: vscode.FileSearchOptions, token: vscode.CancellationToken): Promise<URI[]> {
 					if (options.folder.toString() === rootFolderA.toString()) {
-						assert.deepEqual(options.includes.sort(), ['*.ts', 'foo']);
-						assert.deepEqual(options.excludes.sort(), ['*.js', 'bar']);
+						assert.deepStrictEqual(options.includes.sort(), ['*.ts', 'foo']);
+						assert.deepStrictEqual(options.excludes.sort(), ['*.js', 'bar']);
 					} else {
-						assert.deepEqual(options.includes.sort(), ['*.ts']);
-						assert.deepEqual(options.excludes.sort(), ['*.js']);
+						assert.deepStrictEqual(options.includes.sort(), ['*.ts']);
+						assert.deepStrictEqual(options.excludes.sort(), ['*.js']);
 					}
 
 					return Promise.resolve(null!);
@@ -308,8 +331,8 @@ suite('ExtHostSearch', () => {
 		test('include/excludes resolved correctly', async () => {
 			await registerTestFileSearchProvider({
 				provideFileSearchResults(query: vscode.FileSearchQuery, options: vscode.FileSearchOptions, token: vscode.CancellationToken): Promise<URI[]> {
-					assert.deepEqual(options.includes.sort(), ['*.jsx', '*.ts']);
-					assert.deepEqual(options.excludes.sort(), []);
+					assert.deepStrictEqual(options.includes.sort(), ['*.jsx', '*.ts']);
+					assert.deepStrictEqual(options.excludes.sort(), []);
 
 					return Promise.resolve(null!);
 				}
@@ -442,7 +465,7 @@ suite('ExtHostSearch', () => {
 				]);
 		});
 
-		test.skip('max results = 1', async () => {
+		test('max results = 1', async () => {
 			const reportedResults = [
 				joinPath(rootFolderA, 'file1.ts'),
 				joinPath(rootFolderA, 'file2.ts'),
@@ -473,12 +496,12 @@ suite('ExtHostSearch', () => {
 
 			const { results, stats } = await runFileSearch(query);
 			assert(stats.limitHit, 'Expected to return limitHit');
-			assert.equal(results.length, 1);
+			assert.strictEqual(results.length, 1);
 			compareURIs(results, reportedResults.slice(0, 1));
 			assert(wasCanceled, 'Expected to be canceled when hitting limit');
 		});
 
-		test.skip('max results = 2', async () => {
+		test('max results = 2', async () => {
 			const reportedResults = [
 				joinPath(rootFolderA, 'file1.ts'),
 				joinPath(rootFolderA, 'file2.ts'),
@@ -509,12 +532,12 @@ suite('ExtHostSearch', () => {
 
 			const { results, stats } = await runFileSearch(query);
 			assert(stats.limitHit, 'Expected to return limitHit');
-			assert.equal(results.length, 2);
+			assert.strictEqual(results.length, 2);
 			compareURIs(results, reportedResults.slice(0, 2));
 			assert(wasCanceled, 'Expected to be canceled when hitting limit');
 		});
 
-		test.skip('provider returns maxResults exactly', async () => {
+		test('provider returns maxResults exactly', async () => {
 			const reportedResults = [
 				joinPath(rootFolderA, 'file1.ts'),
 				joinPath(rootFolderA, 'file2.ts'),
@@ -544,7 +567,7 @@ suite('ExtHostSearch', () => {
 
 			const { results, stats } = await runFileSearch(query);
 			assert(!stats.limitHit, 'Expected not to return limitHit');
-			assert.equal(results.length, 2);
+			assert.strictEqual(results.length, 2);
 			compareURIs(results, reportedResults);
 			assert(!wasCanceled, 'Expected not to be canceled when just reaching limit');
 		});
@@ -582,15 +605,15 @@ suite('ExtHostSearch', () => {
 			};
 
 			const { results } = await runFileSearch(query);
-			assert.equal(results.length, 2); // Don't care which 2 we got
-			assert.equal(cancels, 2, 'Expected all invocations to be canceled when hitting limit');
+			assert.strictEqual(results.length, 2); // Don't care which 2 we got
+			assert.strictEqual(cancels, 2, 'Expected all invocations to be canceled when hitting limit');
 		});
 
 		test('works with non-file schemes', async () => {
 			const reportedResults = [
 				joinPath(fancySchemeFolderA, 'file1.ts'),
 				joinPath(fancySchemeFolderA, 'file2.ts'),
-				joinPath(fancySchemeFolderA, 'file3.ts'),
+				joinPath(fancySchemeFolderA, 'subfolder/file3.ts'),
 
 			];
 
@@ -694,12 +717,12 @@ suite('ExtHostSearch', () => {
 						match: null // Don't care about this right now
 					}
 				} : {
-						uri: r.uri.toString(),
-						text: r.text,
-						lineNumber: r.lineNumber
-					});
+					uri: r.uri.toString(),
+					text: r.text,
+					lineNumber: r.lineNumber
+				});
 
-			return assert.deepEqual(
+			return assert.deepStrictEqual(
 				makeComparable(actualTextSearchResults),
 				makeComparable(expected));
 		}
@@ -737,8 +760,8 @@ suite('ExtHostSearch', () => {
 		test('all provider calls get global include/excludes', async () => {
 			await registerTestTextSearchProvider({
 				provideTextSearchResults(query: vscode.TextSearchQuery, options: vscode.TextSearchOptions, progress: vscode.Progress<vscode.TextSearchResult>, token: vscode.CancellationToken): Promise<vscode.TextSearchComplete> {
-					assert.equal(options.includes.length, 1);
-					assert.equal(options.excludes.length, 1);
+					assert.strictEqual(options.includes.length, 1);
+					assert.strictEqual(options.excludes.length, 1);
 					return Promise.resolve(null!);
 				}
 			});
@@ -768,11 +791,11 @@ suite('ExtHostSearch', () => {
 			await registerTestTextSearchProvider({
 				provideTextSearchResults(query: vscode.TextSearchQuery, options: vscode.TextSearchOptions, progress: vscode.Progress<vscode.TextSearchResult>, token: vscode.CancellationToken): Promise<vscode.TextSearchComplete> {
 					if (options.folder.toString() === rootFolderA.toString()) {
-						assert.deepEqual(options.includes.sort(), ['*.ts', 'foo']);
-						assert.deepEqual(options.excludes.sort(), ['*.js', 'bar']);
+						assert.deepStrictEqual(options.includes.sort(), ['*.ts', 'foo']);
+						assert.deepStrictEqual(options.excludes.sort(), ['*.js', 'bar']);
 					} else {
-						assert.deepEqual(options.includes.sort(), ['*.ts']);
-						assert.deepEqual(options.excludes.sort(), ['*.js']);
+						assert.deepStrictEqual(options.includes.sort(), ['*.ts']);
+						assert.deepStrictEqual(options.excludes.sort(), ['*.js']);
 					}
 
 					return Promise.resolve(null!);
@@ -809,8 +832,8 @@ suite('ExtHostSearch', () => {
 		test('include/excludes resolved correctly', async () => {
 			await registerTestTextSearchProvider({
 				provideTextSearchResults(query: vscode.TextSearchQuery, options: vscode.TextSearchOptions, progress: vscode.Progress<vscode.TextSearchResult>, token: vscode.CancellationToken): Promise<vscode.TextSearchComplete> {
-					assert.deepEqual(options.includes.sort(), ['*.jsx', '*.ts']);
-					assert.deepEqual(options.excludes.sort(), []);
+					assert.deepStrictEqual(options.includes.sort(), ['*.jsx', '*.ts']);
+					assert.deepStrictEqual(options.excludes.sort(), []);
 
 					return Promise.resolve(null!);
 				}
@@ -860,14 +883,14 @@ suite('ExtHostSearch', () => {
 		});
 
 		test('basic sibling clause', async () => {
-			mockExtfs.readdir = (_path: string, callback: (error: Error, files: string[]) => void) => {
+			mockPFS.readdir = (_path: string): any => {
 				if (_path === rootFolderA.fsPath) {
-					callback(null!, [
+					return Promise.resolve([
 						'file1.js',
 						'file1.ts'
 					]);
 				} else {
-					callback(new Error('Wrong path'), null!);
+					return Promise.reject(new Error('Wrong path'));
 				}
 			};
 
@@ -903,21 +926,21 @@ suite('ExtHostSearch', () => {
 		});
 
 		test('multiroot sibling clause', async () => {
-			mockExtfs.readdir = (_path: string, callback: (error: Error, files: string[]) => void) => {
+			mockPFS.readdir = (_path: string): any => {
 				if (_path === joinPath(rootFolderA, 'folder').fsPath) {
-					callback(null!, [
+					return Promise.resolve([
 						'fileA.scss',
 						'fileA.css',
 						'file2.css'
 					]);
 				} else if (_path === rootFolderB.fsPath) {
-					callback(null!, [
+					return Promise.resolve([
 						'fileB.ts',
 						'fileB.js',
 						'file3.js'
 					]);
 				} else {
-					callback(new Error('Wrong path'), null!);
+					return Promise.reject(new Error('Wrong path'));
 				}
 			};
 
@@ -1165,8 +1188,8 @@ suite('ExtHostSearch', () => {
 			};
 
 			const { results } = await runTextSearch(query);
-			assert.equal(results.length, 2);
-			assert.equal(cancels, 2);
+			assert.strictEqual(results.length, 2);
+			assert.strictEqual(cancels, 2);
 		});
 
 		test('works with non-file schemes', async () => {

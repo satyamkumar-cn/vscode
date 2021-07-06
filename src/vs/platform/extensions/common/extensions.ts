@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { areSameExtensions } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
 import * as strings from 'vs/base/common/strings';
 import { ILocalization } from 'vs/platform/localizations/common/localizations';
 import { URI } from 'vs/base/common/uri';
+import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 
 export const MANIFEST_CACHE_FOLDER = 'CachedExtensions';
 export const USER_MANIFEST_CACHE_FILE = 'user';
@@ -39,7 +39,7 @@ export interface IGrammar {
 }
 
 export interface IJSONValidation {
-	fileMatch: string;
+	fileMatch: string | string[];
 	url: string;
 }
 
@@ -89,6 +89,58 @@ export interface IColor {
 	defaults: { light: string, dark: string, highContrast: string };
 }
 
+export interface IWebviewEditor {
+	readonly viewType: string;
+	readonly priority: string;
+	readonly selector: readonly {
+		readonly filenamePattern?: string;
+	}[];
+}
+
+export interface ICodeActionContributionAction {
+	readonly kind: string;
+	readonly title: string;
+	readonly description?: string;
+}
+
+export interface ICodeActionContribution {
+	readonly languages: readonly string[];
+	readonly actions: readonly ICodeActionContributionAction[];
+}
+
+export interface IAuthenticationContribution {
+	readonly id: string;
+	readonly label: string;
+}
+
+export interface IWalkthroughStep {
+	readonly id: string;
+	readonly title: string;
+	readonly description: string;
+	readonly media:
+	| { path: string | { dark: string, light: string, hc: string }, altText: string }
+	| { path: string, },
+	readonly doneOn?: { command: string };
+	readonly when?: string;
+}
+
+export interface IWalkthrough {
+	readonly id: string,
+	readonly title: string;
+	readonly description: string;
+	readonly steps: IWalkthroughStep[];
+	readonly primary?: boolean;
+	readonly when?: string;
+}
+
+export interface IStartEntry {
+	readonly title: string;
+	readonly description: string;
+	readonly command: string;
+	readonly type?: 'sample-folder' | 'sample-notebook' | string;
+	readonly when?: string;
+}
+
 export interface IExtensionContributions {
 	commands?: ICommand[];
 	configuration?: IConfiguration | IConfiguration[];
@@ -101,31 +153,26 @@ export interface IExtensionContributions {
 	snippets?: ISnippet[];
 	themes?: ITheme[];
 	iconThemes?: ITheme[];
+	productIconThemes?: ITheme[];
 	viewsContainers?: { [location: string]: IViewContainer[] };
 	views?: { [location: string]: IView[] };
 	colors?: IColor[];
 	localizations?: ILocalization[];
+	readonly customEditors?: readonly IWebviewEditor[];
+	readonly codeActions?: readonly ICodeActionContribution[];
+	authentication?: IAuthenticationContribution[];
+	walkthroughs?: IWalkthrough[];
+	startEntries?: IStartEntry[];
 }
 
-export type ExtensionKind = 'ui' | 'workspace';
-
-export class ExtensionIdentifierWithVersion {
-	constructor(
-		readonly identifier: IExtensionIdentifier,
-		readonly version: string
-	) { }
-
-	key(): string {
-		return `${this.identifier.id}-${this.version}`;
-	}
-
-	equals(o: any): boolean {
-		if (!(o instanceof ExtensionIdentifierWithVersion)) {
-			return false;
-		}
-		return areSameExtensions(this.identifier, o.identifier) && this.version === o.version;
-	}
+export interface IExtensionCapabilities {
+	readonly virtualWorkspaces?: boolean;
+	readonly untrustedWorkspaces?: ExtensionUntrustedWorkspaceSupport;
 }
+
+export type ExtensionKind = 'ui' | 'workspace' | 'web';
+export type ExtensionUntrustedWorkpaceSupportType = boolean | 'limited';
+export type ExtensionUntrustedWorkspaceSupport = { supported: true; } | { supported: false, description: string } | { supported: 'limited', description: string, restrictedConfigurations?: string[] };
 
 export function isIExtensionIdentifier(thing: any): thing is IExtensionIdentifier {
 	return thing
@@ -139,26 +186,50 @@ export interface IExtensionIdentifier {
 	uuid?: string;
 }
 
+export const EXTENSION_CATEGORIES = [
+	'Azure',
+	'Data Science',
+	'Debuggers',
+	'Extension Packs',
+	'Education',
+	'Formatters',
+	'Keymaps',
+	'Language Packs',
+	'Linters',
+	'Machine Learning',
+	'Notebooks',
+	'Programming Languages',
+	'SCM Providers',
+	'Snippets',
+	'Testing',
+	'Themes',
+	'Visualization',
+	'Other',
+];
+
 export interface IExtensionManifest {
 	readonly name: string;
 	readonly displayName?: string;
 	readonly publisher: string;
 	readonly version: string;
-	readonly engines: { vscode: string };
+	readonly engines: { readonly vscode: string };
 	readonly description?: string;
 	readonly main?: string;
+	readonly browser?: string;
 	readonly icon?: string;
 	readonly categories?: string[];
 	readonly keywords?: string[];
 	readonly activationEvents?: string[];
 	readonly extensionDependencies?: string[];
 	readonly extensionPack?: string[];
-	readonly extensionKind?: ExtensionKind;
+	readonly extensionKind?: ExtensionKind | ExtensionKind[];
 	readonly contributes?: IExtensionContributions;
 	readonly repository?: { url: string; };
 	readonly bugs?: { url: string; };
 	readonly enableProposedApi?: boolean;
 	readonly api?: string;
+	readonly scripts?: { [key: string]: string; };
+	readonly capabilities?: IExtensionCapabilities;
 }
 
 export const enum ExtensionType {
@@ -168,9 +239,12 @@ export const enum ExtensionType {
 
 export interface IExtension {
 	readonly type: ExtensionType;
+	readonly isBuiltin: boolean;
 	readonly identifier: IExtensionIdentifier;
 	readonly manifest: IExtensionManifest;
 	readonly location: URI;
+	readonly readmeUrl?: URI;
+	readonly changelogUrl?: URI;
 }
 
 /**
@@ -228,6 +302,48 @@ export class ExtensionIdentifier {
 	}
 }
 
+export interface IExtensionDescription extends IExtensionManifest {
+	readonly identifier: ExtensionIdentifier;
+	readonly uuid?: string;
+	readonly isBuiltin: boolean;
+	readonly isUserBuiltin: boolean;
+	readonly isUnderDevelopment: boolean;
+	readonly extensionLocation: URI;
+	enableProposedApi?: boolean;
+}
+
 export function isLanguagePackExtension(manifest: IExtensionManifest): boolean {
 	return manifest.contributes && manifest.contributes.localizations ? manifest.contributes.localizations.length > 0 : false;
+}
+
+export function isAuthenticaionProviderExtension(manifest: IExtensionManifest): boolean {
+	return manifest.contributes && manifest.contributes.authentication ? manifest.contributes.authentication.length > 0 : false;
+}
+
+export interface IScannedExtension {
+	readonly identifier: IExtensionIdentifier;
+	readonly location: URI;
+	readonly type: ExtensionType;
+	readonly packageJSON: IExtensionManifest;
+	readonly packageNLS?: any;
+	readonly packageNLSUrl?: URI;
+	readonly readmeUrl?: URI;
+	readonly changelogUrl?: URI;
+	readonly isUnderDevelopment: boolean;
+}
+
+export interface ITranslatedScannedExtension {
+	readonly identifier: IExtensionIdentifier;
+	readonly location: URI;
+	readonly type: ExtensionType;
+	readonly packageJSON: IExtensionManifest;
+	readonly readmeUrl?: URI;
+	readonly changelogUrl?: URI;
+	readonly isUnderDevelopment: boolean;
+}
+
+export const IBuiltinExtensionsScannerService = createDecorator<IBuiltinExtensionsScannerService>('IBuiltinExtensionsScannerService');
+export interface IBuiltinExtensionsScannerService {
+	readonly _serviceBrand: undefined;
+	scanBuiltinExtensions(): Promise<IScannedExtension[]>;
 }

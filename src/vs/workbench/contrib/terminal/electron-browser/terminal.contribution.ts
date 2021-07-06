@@ -3,41 +3,32 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as platform from 'vs/base/common/platform';
-import * as nls from 'vs/nls';
-import { Extensions, IConfigurationRegistry } from 'vs/platform/configuration/common/configurationRegistry';
+import { IWorkbenchContributionsRegistry, Extensions as WorkbenchExtensions } from 'vs/workbench/common/contributions';
 import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
-import { Registry } from 'vs/platform/registry/common/platform';
 import { ITerminalInstanceService } from 'vs/workbench/contrib/terminal/browser/terminal';
-import { ITerminalService } from 'vs/workbench/contrib/terminal/common/terminal';
 import { TerminalInstanceService } from 'vs/workbench/contrib/terminal/electron-browser/terminalInstanceService';
-import { TerminalService } from 'vs/workbench/contrib/terminal/electron-browser/terminalService';
-import { getDefaultShell } from 'vs/workbench/contrib/terminal/node/terminal';
+import { TerminalNativeContribution } from 'vs/workbench/contrib/terminal/electron-browser/terminalNativeContribution';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { IConfigurationRegistry, Extensions } from 'vs/platform/configuration/common/configurationRegistry';
+import { getTerminalShellConfiguration } from 'vs/workbench/contrib/terminal/common/terminalConfiguration';
+import { LifecyclePhase } from 'vs/workbench/services/lifecycle/common/lifecycle';
+import { getSystemShell } from 'vs/base/node/shell';
+import { process } from 'vs/base/parts/sandbox/electron-sandbox/globals';
+import { OperatingSystem } from 'vs/base/common/platform';
+import { ElectronTerminalProfileResolverService } from 'vs/workbench/contrib/terminal/electron-sandbox/terminalProfileResolverService';
+import { ITerminalProfileResolverService } from 'vs/workbench/contrib/terminal/common/terminal';
 
-const configurationRegistry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
-configurationRegistry.registerConfiguration({
-	id: 'terminal',
-	order: 100,
-	title: nls.localize('terminalIntegratedConfigurationTitle', "Integrated Terminal"),
-	type: 'object',
-	properties: {
-		'terminal.integrated.shell.linux': {
-			markdownDescription: nls.localize('terminal.integrated.shell.linux', "The path of the shell that the terminal uses on Linux. [Read more about configuring the shell](https://code.visualstudio.com/docs/editor/integrated-terminal#_configuration)."),
-			type: 'string',
-			default: getDefaultShell(platform.Platform.Linux)
-		},
-		'terminal.integrated.shell.osx': {
-			markdownDescription: nls.localize('terminal.integrated.shell.osx', "The path of the shell that the terminal uses on macOS. [Read more about configuring the shell](https://code.visualstudio.com/docs/editor/integrated-terminal#_configuration)."),
-			type: 'string',
-			default: getDefaultShell(platform.Platform.Mac)
-		},
-		'terminal.integrated.shell.windows': {
-			markdownDescription: nls.localize('terminal.integrated.shell.windows', "The path of the shell that the terminal uses on Windows. [Read more about configuring the shell](https://code.visualstudio.com/docs/editor/integrated-terminal#_configuration)."),
-			type: 'string',
-			default: getDefaultShell(platform.Platform.Windows)
-		}
-	}
-});
+// This file contains additional desktop-only contributions on top of those in browser/
 
-registerSingleton(ITerminalService, TerminalService, true);
+// Register services
 registerSingleton(ITerminalInstanceService, TerminalInstanceService, true);
+registerSingleton(ITerminalProfileResolverService, ElectronTerminalProfileResolverService, true);
+
+const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
+workbenchRegistry.registerWorkbenchContribution(TerminalNativeContribution, LifecyclePhase.Ready);
+
+// Register configurations
+const configurationRegistry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
+
+const systemShell = async (os: OperatingSystem) => getSystemShell(os, await process.shellEnv());
+getTerminalShellConfiguration(systemShell).then(config => configurationRegistry.registerConfiguration(config));

@@ -12,6 +12,8 @@ import { illegalArgument } from 'vs/base/common/errors';
  * But these are "more general", as they should work across browsers & OS`s.
  */
 export const enum KeyCode {
+	DependsOnKbLayout = -1,
+
 	/**
 	 * Placed first to cover the 0 value of the enum.
 	 */
@@ -407,7 +409,7 @@ export const enum KeyMod {
 }
 
 export function KeyChord(firstPart: number, secondPart: number): number {
-	let chordPart = ((secondPart & 0x0000FFFF) << 16) >>> 0;
+	const chordPart = ((secondPart & 0x0000FFFF) << 16) >>> 0;
 	return (firstPart | chordPart) >>> 0;
 }
 
@@ -466,10 +468,10 @@ export class SimpleKeybinding {
 	}
 
 	public getHashCode(): string {
-		let ctrl = this.ctrlKey ? '1' : '0';
-		let shift = this.shiftKey ? '1' : '0';
-		let alt = this.altKey ? '1' : '0';
-		let meta = this.metaKey ? '1' : '0';
+		const ctrl = this.ctrlKey ? '1' : '0';
+		const shift = this.shiftKey ? '1' : '0';
+		const alt = this.altKey ? '1' : '0';
+		const meta = this.metaKey ? '1' : '0';
 		return `${ctrl}${shift}${alt}${meta}${this.keyCode}`;
 	}
 
@@ -597,6 +599,17 @@ export abstract class ResolvedKeybinding {
 
 	/**
 	 * Returns the parts that should be used for dispatching.
+	 * Returns null for parts consisting of only modifier keys
+	 * @example keybinding "Shift" -> null
+	 * @example keybinding ("D" with shift == true) -> "shift+D"
 	 */
 	public abstract getDispatchParts(): (string | null)[];
+
+	/**
+	 * Returns the parts that should be used for dispatching single modifier keys
+	 * Returns null for parts that contain more than one modifier or a regular key.
+	 * @example keybinding "Shift" -> "shift"
+	 * @example keybinding ("D" with shift == true") -> null
+	 */
+	public abstract getSingleModifierDispatchParts(): (string | null)[];
 }

@@ -5,14 +5,14 @@
 
 import { IDisposable, IReference } from 'vs/base/common/lifecycle';
 import { URI } from 'vs/base/common/uri';
-import { ITextModel } from 'vs/editor/common/model';
+import { ITextModel, ITextSnapshot } from 'vs/editor/common/model';
 import { IEditorModel } from 'vs/platform/editor/common/editor';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 
 export const ITextModelService = createDecorator<ITextModelService>('textModelService');
 
 export interface ITextModelService {
-	_serviceBrand: any;
+	readonly _serviceBrand: undefined;
 
 	/**
 	 * Provided a resource URI, it will return a model reference
@@ -26,9 +26,9 @@ export interface ITextModelService {
 	registerTextModelContentProvider(scheme: string, provider: ITextModelContentProvider): IDisposable;
 
 	/**
-	 * Check if a provider for the given `scheme` exists
+	 * Check if the given resource can be resolved to a text model.
 	 */
-	hasTextModelContentProvider(scheme: string): boolean;
+	canHandleResource(resource: URI): boolean;
 }
 
 export interface ITextModelContentProvider {
@@ -36,7 +36,7 @@ export interface ITextModelContentProvider {
 	/**
 	 * Given a resource, return the content of the resource as `ITextModel`.
 	 */
-	provideTextContent(resource: URI): Promise<ITextModel | undefined> | null;
+	provideTextContent(resource: URI): Promise<ITextModel | null> | null;
 }
 
 export interface ITextEditorModel extends IEditorModel {
@@ -46,7 +46,21 @@ export interface ITextEditorModel extends IEditorModel {
 	 */
 	readonly textEditorModel: ITextModel | null;
 
+	/**
+	 * Creates a snapshot of the model's contents.
+	 */
+	createSnapshot(this: IResolvedTextEditorModel): ITextSnapshot;
+	createSnapshot(this: ITextEditorModel): ITextSnapshot | null;
+
+	/**
+	 * Signals if this model is readonly or not.
+	 */
 	isReadonly(): boolean;
+
+	/**
+	 * The mode id of the text model if known.
+	 */
+	getMode(): string | undefined;
 }
 
 export interface IResolvedTextEditorModel extends ITextEditorModel {

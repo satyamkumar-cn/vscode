@@ -11,17 +11,13 @@ const os = require('os');
 const cp = require('child_process');
 const path = require('path');
 const es = require('event-stream');
-const azure = require('gulp-azure-storage');
-const electron = require('gulp-atom-electron');
 const vfs = require('vinyl-fs');
 const rename = require('gulp-rename');
 const replace = require('gulp-replace');
 const filter = require('gulp-filter');
-const json = require('gulp-json-editor');
 const _ = require('underscore');
 const util = require('./lib/util');
 const task = require('./lib/task');
-const ext = require('./lib/extensions');
 const buildfile = require('../src/buildfile');
 const common = require('./lib/optimize');
 const root = path.dirname(__dirname);
@@ -30,26 +26,20 @@ const packageJson = require('../package.json');
 const product = require('../product.json');
 const crypto = require('crypto');
 const i18n = require('./lib/i18n');
-const deps = require('./dependencies');
-const getElectronVersion = require('./lib/electron').getElectronVersion;
+const { getProductionDependencies } = require('./lib/dependencies');
+const { config } = require('./lib/electron');
 const createAsar = require('./lib/asar').createAsar;
 const minimist = require('minimist');
 const { compileBuildTask } = require('./gulpfile.compile');
-
-const productionDependencies = deps.getProductionDependencies(path.dirname(__dirname));
-// @ts-ignore
-const baseModules = Object.keys(process.binding('natives')).filter(n => !/^_|\//.test(n));
-const nodeModules = ['electron', 'original-fs']
-	// @ts-ignore JSON checking: dependencies property is optional
-	.concat(Object.keys(product.dependencies || {}))
-	.concat(_.uniq(productionDependencies.map(d => d.name)))
-	.concat(baseModules);
+const { compileExtensionsBuildTask } = require('./gulpfile.extensions');
 
 // Build
 const vscodeEntryPoints = _.flatten([
-	buildfile.entrypoint('vs/workbench/workbench.main'),
+	buildfile.entrypoint('vs/workbench/workbench.desktop.main'),
 	buildfile.base,
-	buildfile.workbench,
+	buildfile.workerExtensionHost,
+	buildfile.workerNotebook,
+	buildfile.workbenchDesktop,
 	buildfile.code
 ]);
 
@@ -60,163 +50,64 @@ const vscodeResources = [
 	'out-build/bootstrap.js',
 	'out-build/bootstrap-fork.js',
 	'out-build/bootstrap-amd.js',
+	'out-build/bootstrap-node.js',
 	'out-build/bootstrap-window.js',
-	'out-build/paths.js',
-	'out-build/vs/**/*.{svg,png,cur,html}',
+	'out-build/vs/**/*.{svg,png,html,jpg}',
+	'!out-build/vs/code/browser/**/*.html',
+	'!out-build/vs/editor/standalone/**/*.svg',
 	'out-build/vs/base/common/performance.js',
 	'out-build/vs/base/node/languagePacks.js',
-	'out-build/vs/base/node/{stdForkStart.js,terminateProcess.sh,cpuUsage.sh}',
-	'out-build/vs/base/browser/ui/octiconLabel/octicons/**',
+	'out-build/vs/base/node/{stdForkStart.js,terminateProcess.sh,cpuUsage.sh,ps.sh}',
+	'out-build/vs/base/browser/ui/codicons/codicon/**',
+	'out-build/vs/base/parts/sandbox/electron-browser/preload.js',
+	'out-build/vs/platform/environment/node/userDataPath.js',
 	'out-build/vs/workbench/browser/media/*-theme.css',
 	'out-build/vs/workbench/contrib/debug/**/*.json',
 	'out-build/vs/workbench/contrib/externalTerminal/**/*.scpt',
-	'out-build/vs/workbench/contrib/webview/electron-browser/webview-pre.js',
+	'out-build/vs/workbench/contrib/webview/browser/pre/*.js',
+	'out-build/vs/workbench/contrib/webview/electron-browser/pre/*.js',
+	'out-build/vs/workbench/services/extensions/worker/extensionHostWorkerMain.js',
 	'out-build/vs/**/markdown.css',
 	'out-build/vs/workbench/contrib/tasks/**/*.json',
-	'out-build/vs/workbench/contrib/welcome/walkThrough/**/*.md',
-	'out-build/vs/workbench/services/files/**/*.exe',
-	'out-build/vs/workbench/services/files/**/*.md',
+	'out-build/vs/platform/files/**/*.exe',
+	'out-build/vs/platform/files/**/*.md',
 	'out-build/vs/code/electron-browser/workbench/**',
 	'out-build/vs/code/electron-browser/sharedProcess/sharedProcess.js',
-	'out-build/vs/code/electron-browser/issue/issueReporter.js',
-	'out-build/vs/code/electron-browser/processExplorer/processExplorer.js',
+	'out-build/vs/code/electron-sandbox/issue/issueReporter.js',
+	'out-build/vs/code/electron-sandbox/processExplorer/processExplorer.js',
 	'!**/test/**'
 ];
 
-const BUNDLED_FILE_HEADER = [
-	'/*!--------------------------------------------------------',
-	' * Copyright (C) Microsoft Corporation. All rights reserved.',
-	' *--------------------------------------------------------*/'
-].join('\n');
-
 const optimizeVSCodeTask = task.define('optimize-vscode', task.series(
-	task.parallel(
-		util.rimraf('out-vscode'),
-		compileBuildTask
-	),
+	util.rimraf('out-vscode'),
 	common.optimizeTask({
 		src: 'out-build',
 		entryPoints: vscodeEntryPoints,
 		resources: vscodeResources,
-		loaderConfig: common.loaderConfig(nodeModules),
-		header: BUNDLED_FILE_HEADER,
+		loaderConfig: common.loaderConfig(),
 		out: 'out-vscode',
 		bundleInfo: undefined
 	})
 ));
-
-
-const optimizeIndexJSTask = task.define('optimize-index-js', task.series(
-	optimizeVSCodeTask,
-	() => {
-		const fullpath = path.join(process.cwd(), 'out-vscode/bootstrap-window.js');
-		const contents = fs.readFileSync(fullpath).toString();
-		const newContents = contents.replace('[/*BUILD->INSERT_NODE_MODULES*/]', JSON.stringify(nodeModules));
-		fs.writeFileSync(fullpath, newContents);
-	}
-));
+gulp.task(optimizeVSCodeTask);
 
 const sourceMappingURLBase = `https://ticino.blob.core.windows.net/sourcemaps/${commit}`;
 const minifyVSCodeTask = task.define('minify-vscode', task.series(
-	task.parallel(
-		util.rimraf('out-vscode-min'),
-		optimizeIndexJSTask
-	),
+	optimizeVSCodeTask,
+	util.rimraf('out-vscode-min'),
 	common.minifyTask('out-vscode', `${sourceMappingURLBase}/core`)
 ));
+gulp.task(minifyVSCodeTask);
 
-// Package
-
-// @ts-ignore JSON checking: darwinCredits is optional
-const darwinCreditsTemplate = product.darwinCredits && _.template(fs.readFileSync(path.join(root, product.darwinCredits), 'utf8'));
-
-function darwinBundleDocumentType(extensions, icon) {
-	return {
-		name: product.nameLong + ' document',
-		role: 'Editor',
-		ostypes: ["TEXT", "utxt", "TUTX", "****"],
-		extensions: extensions,
-		iconFile: icon
-	};
-}
-
-const config = {
-	version: getElectronVersion(),
-	productAppName: product.nameLong,
-	companyName: 'Microsoft Corporation',
-	copyright: 'Copyright (C) 2019 Microsoft. All rights reserved',
-	darwinIcon: 'resources/darwin/code.icns',
-	darwinBundleIdentifier: product.darwinBundleIdentifier,
-	darwinApplicationCategoryType: 'public.app-category.developer-tools',
-	darwinHelpBookFolder: 'VS Code HelpBook',
-	darwinHelpBookName: 'VS Code HelpBook',
-	darwinBundleDocumentTypes: [
-		darwinBundleDocumentType(["bat", "cmd"], 'resources/darwin/bat.icns'),
-		darwinBundleDocumentType(["bowerrc"], 'resources/darwin/bower.icns'),
-		darwinBundleDocumentType(["c", "h"], 'resources/darwin/c.icns'),
-		darwinBundleDocumentType(["config", "editorconfig", "gitattributes", "gitconfig", "gitignore", "ini"], 'resources/darwin/config.icns'),
-		darwinBundleDocumentType(["cc", "cpp", "cxx", "hh", "hpp", "hxx"], 'resources/darwin/cpp.icns'),
-		darwinBundleDocumentType(["cs", "csx"], 'resources/darwin/csharp.icns'),
-		darwinBundleDocumentType(["css"], 'resources/darwin/css.icns'),
-		darwinBundleDocumentType(["go"], 'resources/darwin/go.icns'),
-		darwinBundleDocumentType(["asp", "aspx", "cshtml", "htm", "html", "jshtm", "jsp", "phtml", "shtml"], 'resources/darwin/html.icns'),
-		darwinBundleDocumentType(["jade"], 'resources/darwin/jade.icns'),
-		darwinBundleDocumentType(["jav", "java"], 'resources/darwin/java.icns'),
-		darwinBundleDocumentType(["js", "jscsrc", "jshintrc", "mjs"], 'resources/darwin/javascript.icns'),
-		darwinBundleDocumentType(["json"], 'resources/darwin/json.icns'),
-		darwinBundleDocumentType(["less"], 'resources/darwin/less.icns'),
-		darwinBundleDocumentType(["markdown", "md", "mdoc", "mdown", "mdtext", "mdtxt", "mdwn", "mkd", "mkdn"], 'resources/darwin/markdown.icns'),
-		darwinBundleDocumentType(["php"], 'resources/darwin/php.icns'),
-		darwinBundleDocumentType(["ps1", "psd1", "psm1"], 'resources/darwin/powershell.icns'),
-		darwinBundleDocumentType(["py"], 'resources/darwin/python.icns'),
-		darwinBundleDocumentType(["gemspec", "rb"], 'resources/darwin/ruby.icns'),
-		darwinBundleDocumentType(["scss"], 'resources/darwin/sass.icns'),
-		darwinBundleDocumentType(["bash", "bash_login", "bash_logout", "bash_profile", "bashrc", "profile", "rhistory", "rprofile", "sh", "zlogin", "zlogout", "zprofile", "zsh", "zshenv", "zshrc"], 'resources/darwin/shell.icns'),
-		darwinBundleDocumentType(["sql"], 'resources/darwin/sql.icns'),
-		darwinBundleDocumentType(["ts"], 'resources/darwin/typescript.icns'),
-		darwinBundleDocumentType(["tsx", "jsx"], 'resources/darwin/react.icns'),
-		darwinBundleDocumentType(["vue"], 'resources/darwin/vue.icns'),
-		darwinBundleDocumentType(["ascx", "csproj", "dtd", "wxi", "wxl", "wxs", "xml", "xaml"], 'resources/darwin/xml.icns'),
-		darwinBundleDocumentType(["eyaml", "eyml", "yaml", "yml"], 'resources/darwin/yaml.icns'),
-		darwinBundleDocumentType(["clj", "cljs", "cljx", "clojure", "code-workspace", "coffee", "ctp", "dockerfile", "dot", "edn", "fs", "fsi", "fsscript", "fsx", "handlebars", "hbs", "lua", "m", "makefile", "ml", "mli", "pl", "pl6", "pm", "pm6", "pod", "pp", "properties", "psgi", "pug", "r", "rs", "rt", "svg", "svgz", "t", "txt", "vb", "xcodeproj", "xcworkspace"], 'resources/darwin/default.icns')
-	],
-	darwinBundleURLTypes: [{
-		role: 'Viewer',
-		name: product.nameLong,
-		urlSchemes: [product.urlProtocol]
-	}],
-	darwinForceDarkModeSupport: true,
-	darwinCredits: darwinCreditsTemplate ? Buffer.from(darwinCreditsTemplate({ commit: commit, date: new Date().toISOString() })) : undefined,
-	linuxExecutableName: product.applicationName,
-	winIcon: 'resources/win32/code.ico',
-	token: process.env['VSCODE_MIXIN_PASSWORD'] || process.env['GITHUB_TOKEN'] || undefined,
-
-	// @ts-ignore JSON checking: electronRepository is optional
-	repo: product.electronRepository || undefined
-};
-
-function getElectron(arch) {
-	return () => {
-		const electronOpts = _.extend({}, config, {
-			platform: process.platform,
-			arch,
-			ffmpegChromium: true,
-			keepDefaultApp: true
-		});
-
-		return gulp.src('package.json')
-			.pipe(json({ name: product.nameShort }))
-			.pipe(electron(electronOpts))
-			.pipe(filter(['**', '!**/app/package.json']))
-			.pipe(vfs.dest('.build/electron'));
-	};
-}
-
-gulp.task(task.define('electron', task.series(util.rimraf('.build/electron'), getElectron(process.arch))));
-gulp.task(task.define('electron-ia32', task.series(util.rimraf('.build/electron'), getElectron('ia32'))));
-gulp.task(task.define('electron-x64', task.series(util.rimraf('.build/electron'), getElectron('x64'))));
-gulp.task(task.define('electron-arm', task.series(util.rimraf('.build/electron'), getElectron('armv7l'))));
-gulp.task(task.define('electron-arm64', task.series(util.rimraf('.build/electron'), getElectron('arm64'))));
+const core = task.define('core-ci', task.series(
+	gulp.task('compile-build'),
+	task.parallel(
+		gulp.task('minify-vscode'),
+		gulp.task('minify-vscode-reh'),
+		gulp.task('minify-vscode-reh-web'),
+	)
+));
+gulp.task(core);
 
 /**
  * Compute checksums for some files.
@@ -226,9 +117,9 @@ gulp.task(task.define('electron-arm64', task.series(util.rimraf('.build/electron
  * @return {Object} A map of paths to checksums.
  */
 function computeChecksums(out, filenames) {
-	var result = {};
+	let result = {};
 	filenames.forEach(function (filename) {
-		var fullPath = path.join(process.cwd(), out, filename);
+		let fullPath = path.join(process.cwd(), out, filename);
 		result[filename] = computeChecksum(fullPath);
 	});
 	return result;
@@ -241,9 +132,9 @@ function computeChecksums(out, filenames) {
  * @return {string} The checksum for `filename`.
  */
 function computeChecksum(filename) {
-	var contents = fs.readFileSync(filename);
+	let contents = fs.readFileSync(filename);
 
-	var hash = crypto
+	let hash = crypto
 		.createHash('md5')
 		.update(contents)
 		.digest('base64')
@@ -259,28 +150,39 @@ function packageTask(platform, arch, sourceFolderName, destinationFolderName, op
 	platform = platform || process.platform;
 
 	return () => {
+		const electron = require('gulp-atom-electron');
+		const json = require('gulp-json-editor');
+
 		const out = sourceFolderName;
 
 		const checksums = computeChecksums(out, [
-			'vs/workbench/workbench.main.js',
-			'vs/workbench/workbench.main.css',
+			'vs/base/parts/sandbox/electron-browser/preload.js',
+			'vs/workbench/workbench.desktop.main.js',
+			'vs/workbench/workbench.desktop.main.css',
+			'vs/workbench/services/extensions/node/extensionHostProcess.js',
 			'vs/code/electron-browser/workbench/workbench.html',
 			'vs/code/electron-browser/workbench/workbench.js'
 		]);
 
 		const src = gulp.src(out + '/**', { base: '.' })
 			.pipe(rename(function (path) { path.dirname = path.dirname.replace(new RegExp('^' + out), 'out'); }))
-			.pipe(util.setExecutableBit(['**/*.sh']))
-			.pipe(filter(['**', '!**/*.js.map']));
+			.pipe(util.setExecutableBit(['**/*.sh']));
 
-		const root = path.resolve(path.join(__dirname, '..'));
+		const platformSpecificBuiltInExtensionsExclusions = product.builtInExtensions.filter(ext => {
+			if (!ext.platforms) {
+				return false;
+			}
 
-		const sources = es.merge(src, ext.packageExtensionsStream({
-			sourceMappingURLBase: sourceMappingURLBase
-		}));
+			const set = new Set(ext.platforms);
+			return !set.has(platform);
+		}).map(ext => `!.build/extensions/${ext.name}/**`);
+
+		const extensions = gulp.src(['.build/extensions/**', ...platformSpecificBuiltInExtensionsExclusions], { base: '.build', dot: true });
+
+		const sources = es.merge(src, extensions)
+			.pipe(filter(['**', '!**/*.js.map'], { dot: true }));
 
 		let version = packageJson.version;
-		// @ts-ignore JSON checking: quality is optional
 		const quality = product.quality;
 
 		if (quality && quality !== 'stable') {
@@ -308,45 +210,32 @@ function packageTask(platform, arch, sourceFolderName, destinationFolderName, op
 		const productJsonStream = gulp.src(['product.json'], { base: '.' })
 			.pipe(json(productJsonUpdate));
 
-		const license = gulp.src(['LICENSES.chromium.html', 'LICENSE.txt', 'ThirdPartyNotices.txt', 'licenses/**'], { base: '.', allowEmpty: true });
-
-		const watermark = gulp.src(['resources/letterpress.svg', 'resources/letterpress-dark.svg', 'resources/letterpress-hc.svg'], { base: '.' });
+		const license = gulp.src(['LICENSES.chromium.html', product.licenseFileName, 'ThirdPartyNotices.txt', 'licenses/**'], { base: '.', allowEmpty: true });
 
 		// TODO the API should be copied to `out` during compile, not here
 		const api = gulp.src('src/vs/vscode.d.ts').pipe(rename('out/vs/vscode.d.ts'));
 
-		const depsSrc = [
-			..._.flatten(productionDependencies.map(d => path.relative(root, d.path)).map(d => [`${d}/**`, `!${d}/**/{test,tests}/**`])),
-			// @ts-ignore JSON checking: dependencies is optional
-			..._.flatten(Object.keys(product.dependencies || {}).map(d => [`node_modules/${d}/**`, `!node_modules/${d}/**/{test,tests}/**`]))
-		];
+		const telemetry = gulp.src('.build/telemetry/**', { base: '.build/telemetry', dot: true });
 
-		const deps = gulp.src(depsSrc, { base: '.', dot: true })
-			.pipe(filter(['**', '!**/package-lock.json']))
-			.pipe(util.cleanNodeModule('fsevents', ['binding.gyp', 'fsevents.cc', 'build/**', 'src/**', 'test/**'], ['**/*.node']))
-			.pipe(util.cleanNodeModule('vscode-sqlite3', ['binding.gyp', 'benchmark/**', 'cloudformation/**', 'deps/**', 'test/**', 'build/**', 'src/**'], ['build/Release/*.node']))
-			.pipe(util.cleanNodeModule('oniguruma', ['binding.gyp', 'build/**', 'src/**', 'deps/**'], ['build/Release/*.node', 'src/*.js']))
-			.pipe(util.cleanNodeModule('windows-mutex', ['binding.gyp', 'build/**', 'src/**'], ['**/*.node']))
-			.pipe(util.cleanNodeModule('native-keymap', ['binding.gyp', 'build/**', 'src/**', 'deps/**'], ['build/Release/*.node']))
-			.pipe(util.cleanNodeModule('native-is-elevated', ['binding.gyp', 'build/**', 'src/**', 'deps/**'], ['build/Release/*.node']))
-			.pipe(util.cleanNodeModule('native-watchdog', ['binding.gyp', 'build/**', 'src/**'], ['build/Release/*.node']))
-			.pipe(util.cleanNodeModule('spdlog', ['binding.gyp', 'build/**', 'deps/**', 'src/**', 'test/**'], ['build/Release/*.node']))
-			.pipe(util.cleanNodeModule('jschardet', ['dist/**']))
-			.pipe(util.cleanNodeModule('windows-foreground-love', ['binding.gyp', 'build/**', 'src/**'], ['**/*.node']))
-			.pipe(util.cleanNodeModule('windows-process-tree', ['binding.gyp', 'build/**', 'src/**'], ['**/*.node']))
-			.pipe(util.cleanNodeModule('gc-signals', ['binding.gyp', 'build/**', 'src/**', 'deps/**'], ['build/Release/*.node', 'src/index.js']))
-			.pipe(util.cleanNodeModule('keytar', ['binding.gyp', 'build/**', 'src/**', 'script/**', 'node_modules/**'], ['**/*.node']))
-			.pipe(util.cleanNodeModule('node-pty', ['binding.gyp', 'build/**', 'src/**', 'tools/**'], ['build/Release/*.exe', 'build/Release/*.dll', 'build/Release/*.node']))
-			.pipe(util.cleanNodeModule('vscode-nsfw', ['binding.gyp', 'build/**', 'src/**', 'openpa/**', 'includes/**'], ['build/Release/*.node', '**/*.a']))
-			.pipe(util.cleanNodeModule('vsda', ['binding.gyp', 'README.md', 'build/**', '*.bat', '*.sh', '*.cpp', '*.h'], ['build/Release/vsda.node']))
-			.pipe(createAsar(path.join(process.cwd(), 'node_modules'), ['**/*.node', '**/vscode-ripgrep/bin/*', '**/node-pty/build/Release/*'], 'app/node_modules.asar'));
+		const jsFilter = util.filter(data => !data.isDirectory() && /\.js$/.test(data.path));
+		const root = path.resolve(path.join(__dirname, '..'));
+		const productionDependencies = getProductionDependencies(root);
+		const dependenciesSrc = _.flatten(productionDependencies.map(d => path.relative(root, d.path)).map(d => [`${d}/**`, `!${d}/**/{test,tests}/**`]));
+
+		const deps = gulp.src(dependenciesSrc, { base: '.', dot: true })
+			.pipe(filter(['**', `!**/${config.version}/**`, '!**/bin/darwin-arm64-87/**', '!**/package-lock.json', '!**/yarn.lock', '!**/*.js.map']))
+			.pipe(util.cleanNodeModules(path.join(__dirname, '.moduleignore')))
+			.pipe(jsFilter)
+			.pipe(util.rewriteSourceMappingURL(sourceMappingURLBase))
+			.pipe(jsFilter.restore)
+			.pipe(createAsar(path.join(process.cwd(), 'node_modules'), ['**/*.node', '**/vscode-ripgrep/bin/*', '**/node-pty/build/Release/*', '**/*.wasm'], 'node_modules.asar'));
 
 		let all = es.merge(
 			packageJsonStream,
 			productJsonStream,
 			license,
-			watermark,
 			api,
+			telemetry,
 			sources,
 			deps
 		);
@@ -395,10 +284,19 @@ function packageTask(platform, arch, sourceFolderName, destinationFolderName, op
 		let result = all
 			.pipe(util.skipDirectories())
 			.pipe(util.fixWin32DirectoryPermissions())
-			.pipe(electron(_.extend({}, config, { platform, arch, ffmpegChromium: true })))
-			.pipe(filter(['**', '!LICENSE', '!LICENSES.chromium.html', '!version']));
+			.pipe(filter(['**', '!**/.github/**'], { dot: true })) // https://github.com/microsoft/vscode/issues/116523
+			.pipe(electron(_.extend({}, config, { platform, arch: arch === 'armhf' ? 'arm' : arch, ffmpegChromium: true })))
+			.pipe(filter(['**', '!LICENSE', '!LICENSES.chromium.html', '!version'], { dot: true }));
 
-		// result = es.merge(result, gulp.src('resources/completions/**', { base: '.' }));
+		if (platform === 'linux') {
+			result = es.merge(result, gulp.src('resources/completions/bash/code', { base: '.' })
+				.pipe(replace('@@APPNAME@@', product.applicationName))
+				.pipe(rename(function (f) { f.basename = product.applicationName; })));
+
+			result = es.merge(result, gulp.src('resources/completions/zsh/_code', { base: '.' })
+				.pipe(replace('@@APPNAME@@', product.applicationName))
+				.pipe(rename(function (f) { f.basename = '_' + product.applicationName; })));
+		}
 
 		if (platform === 'win32') {
 			result = es.merge(result, gulp.src('resources/win32/bin/code.js', { base: 'resources/win32', allowEmpty: true }));
@@ -409,14 +307,19 @@ function packageTask(platform, arch, sourceFolderName, destinationFolderName, op
 
 			result = es.merge(result, gulp.src('resources/win32/bin/code.sh', { base: 'resources/win32' })
 				.pipe(replace('@@NAME@@', product.nameShort))
+				.pipe(replace('@@PRODNAME@@', product.nameLong))
+				.pipe(replace('@@VERSION@@', version))
 				.pipe(replace('@@COMMIT@@', commit))
 				.pipe(replace('@@APPNAME@@', product.applicationName))
+				.pipe(replace('@@DATAFOLDER@@', product.dataFolderName))
+				.pipe(replace('@@QUALITY@@', quality))
 				.pipe(rename(function (f) { f.basename = product.applicationName; f.extname = ''; })));
 
 			result = es.merge(result, gulp.src('resources/win32/VisualElementsManifest.xml', { base: 'resources/win32' })
 				.pipe(rename(product.nameShort + '.VisualElementsManifest.xml')));
 		} else if (platform === 'linux') {
 			result = es.merge(result, gulp.src('resources/linux/bin/code.sh', { base: '.' })
+				.pipe(replace('@@PRODNAME@@', product.nameLong))
 				.pipe(replace('@@NAME@@', product.applicationName))
 				.pipe(rename('bin/' + product.applicationName)));
 		}
@@ -439,10 +342,12 @@ const buildRoot = path.dirname(root);
 const BUILD_TARGETS = [
 	{ platform: 'win32', arch: 'ia32' },
 	{ platform: 'win32', arch: 'x64' },
-	{ platform: 'darwin', arch: null, opts: { stats: true } },
+	{ platform: 'win32', arch: 'arm64' },
+	{ platform: 'darwin', arch: 'x64', opts: { stats: true } },
+	{ platform: 'darwin', arch: 'arm64', opts: { stats: true } },
 	{ platform: 'linux', arch: 'ia32' },
 	{ platform: 'linux', arch: 'x64' },
-	{ platform: 'linux', arch: 'arm' },
+	{ platform: 'linux', arch: 'armhf' },
 	{ platform: 'linux', arch: 'arm64' },
 ];
 BUILD_TARGETS.forEach(buildTarget => {
@@ -451,19 +356,31 @@ BUILD_TARGETS.forEach(buildTarget => {
 	const arch = buildTarget.arch;
 	const opts = buildTarget.opts;
 
-	['', 'min'].forEach(minified => {
+	const [vscode, vscodeMin] = ['', 'min'].map(minified => {
 		const sourceFolderName = `out-vscode${dashed(minified)}`;
 		const destinationFolderName = `VSCode${dashed(platform)}${dashed(arch)}`;
 
-		const vscodeTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
-			task.parallel(
-				minified ? minifyVSCodeTask : optimizeVSCodeTask,
-				util.rimraf(path.join(buildRoot, destinationFolderName))
-			),
+		const vscodeTaskCI = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}-ci`, task.series(
+			util.rimraf(path.join(buildRoot, destinationFolderName)),
 			packageTask(platform, arch, sourceFolderName, destinationFolderName, opts)
 		));
+		gulp.task(vscodeTaskCI);
+
+		const vscodeTask = task.define(`vscode${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
+			compileBuildTask,
+			compileExtensionsBuildTask,
+			minified ? minifyVSCodeTask : optimizeVSCodeTask,
+			vscodeTaskCI
+		));
 		gulp.task(vscodeTask);
+
+		return vscodeTask;
 	});
+
+	if (process.platform === platform && process.arch === arch) {
+		gulp.task(task.define('vscode', task.series(vscode)));
+		gulp.task(task.define('vscode-min', task.series(vscodeMin)));
+	}
 });
 
 // Transifex Localizations
@@ -490,10 +407,12 @@ const apiToken = process.env.TRANSIFEX_API_TOKEN;
 gulp.task(task.define(
 	'vscode-translations-push',
 	task.series(
+		compileBuildTask,
+		compileExtensionsBuildTask,
 		optimizeVSCodeTask,
 		function () {
 			const pathToMetadata = './out-vscode/nls.metadata.json';
-			const pathToExtensions = './extensions/*';
+			const pathToExtensions = '.build/extensions/*';
 			const pathToSetup = 'build/win32/**/{Default.isl,messages.en.isl}';
 
 			return es.merge(
@@ -509,10 +428,12 @@ gulp.task(task.define(
 gulp.task(task.define(
 	'vscode-translations-export',
 	task.series(
+		compileBuildTask,
+		compileExtensionsBuildTask,
 		optimizeVSCodeTask,
 		function () {
 			const pathToMetadata = './out-vscode/nls.metadata.json';
-			const pathToExtensions = './extensions/*';
+			const pathToExtensions = '.build/extensions/*';
 			const pathToSetup = 'build/win32/**/{Default.isl,messages.en.isl}';
 
 			return es.merge(
@@ -532,7 +453,7 @@ gulp.task('vscode-translations-pull', function () {
 });
 
 gulp.task('vscode-translations-import', function () {
-	var options = minimist(process.argv.slice(2), {
+	let options = minimist(process.argv.slice(2), {
 		string: 'location',
 		default: {
 			location: '../vscode-translations-import'
@@ -544,32 +465,6 @@ gulp.task('vscode-translations-import', function () {
 			.pipe(i18n.prepareIslFiles(language, innoSetupConfig[language.id]))
 			.pipe(vfs.dest(`./build/win32/i18n`));
 	}));
-});
-
-// Sourcemaps
-
-gulp.task('upload-vscode-sourcemaps', () => {
-	const vs = gulp.src('out-vscode-min/**/*.map', { base: 'out-vscode-min' })
-		.pipe(es.mapSync(f => {
-			f.path = `${f.base}/core/${f.relative}`;
-			return f;
-		}));
-
-	const extensionsOut = gulp.src('extensions/**/out/**/*.map', { base: '.' });
-	const extensionsDist = gulp.src('extensions/**/dist/**/*.map', { base: '.' });
-
-	return es.merge(vs, extensionsOut, extensionsDist)
-		.pipe(es.through(function (data) {
-			// debug
-			console.log('Uploading Sourcemap', data.relative);
-			this.emit('data', data);
-		}))
-		.pipe(azure.upload({
-			account: process.env.AZURE_STORAGE_ACCOUNT,
-			key: process.env.AZURE_STORAGE_ACCESS_KEY,
-			container: 'sourcemaps',
-			prefix: commit + '/'
-		}));
 });
 
 // This task is only run for the MacOS build
@@ -586,22 +481,34 @@ const generateVSCodeConfigurationTask = task.define('generate-vscode-configurati
 
 		const userDataDir = path.join(os.tmpdir(), 'tmpuserdata');
 		const extensionsDir = path.join(os.tmpdir(), 'tmpextdir');
+		const arch = process.env['VSCODE_ARCH'];
+		const appRoot = path.join(buildDir, `VSCode-darwin-${arch}`);
 		const appName = process.env.VSCODE_QUALITY === 'insider' ? 'Visual\\ Studio\\ Code\\ -\\ Insiders.app' : 'Visual\\ Studio\\ Code.app';
-		const appPath = path.join(buildDir, `VSCode-darwin/${appName}/Contents/Resources/app/bin/code`);
-		const codeProc = cp.exec(`${appPath} --export-default-configuration='${allConfigDetailsPath}' --wait --user-data-dir='${userDataDir}' --extensions-dir='${extensionsDir}'`);
+		const appPath = path.join(appRoot, appName, 'Contents', 'Resources', 'app', 'bin', 'code');
+		const codeProc = cp.exec(
+			`${appPath} --export-default-configuration='${allConfigDetailsPath}' --wait --user-data-dir='${userDataDir}' --extensions-dir='${extensionsDir}'`,
+			(err, stdout, stderr) => {
+				clearTimeout(timer);
+				if (err) {
+					console.log(`err: ${err} ${err.message} ${err.toString()}`);
+					reject(err);
+				}
 
+				if (stdout) {
+					console.log(`stdout: ${stdout}`);
+				}
+
+				if (stderr) {
+					console.log(`stderr: ${stderr}`);
+				}
+
+				resolve();
+			}
+		);
 		const timer = setTimeout(() => {
 			codeProc.kill();
 			reject(new Error('export-default-configuration process timed out'));
-		}, 10 * 1000);
-
-		codeProc.stdout.on('data', d => console.log(d.toString()));
-		codeProc.stderr.on('data', d => console.log(d.toString()));
-
-		codeProc.on('exit', () => {
-			clearTimeout(timer);
-			resolve();
-		});
+		}, 12 * 1000);
 
 		codeProc.on('error', err => {
 			clearTimeout(timer);
@@ -616,9 +523,11 @@ gulp.task(task.define(
 	task.series(
 		generateVSCodeConfigurationTask,
 		() => {
+			const azure = require('gulp-azure-storage');
+
 			if (!shouldSetupSettingsSearch()) {
 				const branch = process.env.BUILD_SOURCEBRANCH;
-				console.log(`Only runs on master and release branches, not ${branch}`);
+				console.log(`Only runs on main and release branches, not ${branch}`);
 				return;
 			}
 
@@ -644,24 +553,23 @@ gulp.task(task.define(
 
 function shouldSetupSettingsSearch() {
 	const branch = process.env.BUILD_SOURCEBRANCH;
-	return branch && (/\/master$/.test(branch) || branch.indexOf('/release/') >= 0);
+	return branch && (/\/main$/.test(branch) || branch.indexOf('/release/') >= 0);
 }
 
 function getSettingsSearchBuildId(packageJson) {
 	try {
 		const branch = process.env.BUILD_SOURCEBRANCH;
 		const branchId = branch.indexOf('/release/') >= 0 ? 0 :
-			/\/master$/.test(branch) ? 1 :
+			/\/main$/.test(branch) ? 1 :
 				2; // Some unexpected branch
 
 		const out = cp.execSync(`git rev-list HEAD --count`);
 		const count = parseInt(out.toString());
 
 		// <version number><commit count><branchId (avoid unlikely conflicts)>
-		// 1.25.1, 1,234,567 commits, master = 1250112345671
+		// 1.25.1, 1,234,567 commits, main = 1250112345671
 		return util.versionStringToNumber(packageJson.version) * 1e8 + count * 10 + branchId;
 	} catch (e) {
 		throw new Error('Could not determine build number: ' + e.toString());
 	}
 }
-

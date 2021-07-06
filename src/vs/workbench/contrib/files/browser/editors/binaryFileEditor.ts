@@ -3,21 +3,20 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as nls from 'vs/nls';
+import { localize } from 'vs/nls';
 import { BaseBinaryResourceEditor } from 'vs/workbench/browser/parts/editor/binaryEditor';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
-import { IWindowsService } from 'vs/platform/windows/common/windows';
 import { EditorInput, EditorOptions } from 'vs/workbench/common/editor';
 import { FileEditorInput } from 'vs/workbench/contrib/files/common/editors/fileEditorInput';
-import { URI } from 'vs/base/common/uri';
 import { BINARY_FILE_EDITOR_ID } from 'vs/workbench/contrib/files/common/files';
-import { IFileService } from 'vs/platform/files/common/files';
-import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IStorageService } from 'vs/platform/storage/common/storage';
+import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { EditorOverride } from 'vs/platform/editor/common/editor';
+import { IEditorOverrideService } from 'vs/workbench/services/editor/common/editorOverrideService';
 
 /**
- * An implementation of editor for binary files like images.
+ * An implementation of editor for binary files that cannot be displayed.
  */
 export class BinaryFileEditor extends BaseBinaryResourceEditor {
 
@@ -26,45 +25,42 @@ export class BinaryFileEditor extends BaseBinaryResourceEditor {
 	constructor(
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IThemeService themeService: IThemeService,
-		@IFileService fileService: IFileService,
-		@IWindowsService private readonly windowsService: IWindowsService,
 		@IEditorService private readonly editorService: IEditorService,
+		@IEditorOverrideService private readonly editorOverrideService: IEditorOverrideService,
 		@IStorageService storageService: IStorageService
 	) {
 		super(
 			BinaryFileEditor.ID,
 			{
-				openInternal: (input, options) => this.openInternal(input, options),
-				openExternal: resource => this.openExternal(resource)
+				openInternal: (input, options) => this.openInternal(input, options)
 			},
 			telemetryService,
 			themeService,
-			fileService,
 			storageService
 		);
 	}
 
-	private openInternal(input: EditorInput, options: EditorOptions): Promise<void> {
-		if (input instanceof FileEditorInput) {
+	private async openInternal(input: EditorInput, options: EditorOptions | undefined): Promise<void> {
+		if (input instanceof FileEditorInput && this.group) {
+
+			// Enforce to open the input as text to enable our text based viewer
 			input.setForceOpenAsText();
 
-			return this.editorService.openEditor(input, options, this.group).then(() => undefined);
+			// Try to let the user pick an override if there is one availabe
+			const overridenInput = await this.editorOverrideService.resolveEditorOverride(input, { ...options, override: EditorOverride.PICK, }, this.group);
+
+			let newOptions = overridenInput?.options ?? options;
+			newOptions = { ...newOptions, override: EditorOverride.DISABLED };
+			// Replace the overrriden input, with the text based input
+			await this.editorService.replaceEditors([{
+				editor: input,
+				replacement: overridenInput?.editor ?? input,
+				options: newOptions,
+			}], overridenInput?.group ?? this.group);
 		}
-
-		return Promise.resolve();
 	}
 
-	private openExternal(resource: URI): void {
-		this.windowsService.openExternal(resource.toString()).then(didOpen => {
-			if (!didOpen) {
-				return this.windowsService.showItemInFolder(resource.fsPath);
-			}
-
-			return undefined;
-		});
-	}
-
-	getTitle(): string | null {
-		return this.input ? this.input.getName() : nls.localize('binaryFileEditor', "Binary File Viewer");
+	override getTitle(): string {
+		return this.input ? this.input.getName() : localize('binaryFileEditor', "Binary File Viewer");
 	}
 }

@@ -5,50 +5,82 @@
 
 import { localize } from 'vs/nls';
 import { Action } from 'vs/base/common/actions';
-import { IFileService } from 'vs/platform/files/common/files';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { IEditor } from 'vs/workbench/common/editor';
-import { join } from 'vs/base/common/path';
-import { URI } from 'vs/base/common/uri';
-import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
+import { ILocalizationsService } from 'vs/platform/localizations/common/localizations';
+import { IQuickInputService, IQuickPickItem } from 'vs/platform/quickinput/common/quickInput';
+import { IJSONEditingService } from 'vs/workbench/services/configuration/common/jsonEditing';
+import { IHostService } from 'vs/workbench/services/host/browser/host';
+import { INotificationService } from 'vs/platform/notification/common/notification';
 import { language } from 'vs/base/common/platform';
-import { ILabelService } from 'vs/platform/label/common/label';
+import { IExtensionsViewPaneContainer, VIEWLET_ID as EXTENSIONS_VIEWLET_ID } from 'vs/workbench/contrib/extensions/common/extensions';
+import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
+import { IDialogService } from 'vs/platform/dialogs/common/dialogs';
+import { IProductService } from 'vs/platform/product/common/productService';
 
 export class ConfigureLocaleAction extends Action {
 	public static readonly ID = 'workbench.action.configureLocale';
 	public static readonly LABEL = localize('configureLocale', "Configure Display Language");
 
-	private static DEFAULT_CONTENT: string = [
-		'{',
-		`\t// ${localize('displayLanguage', 'Defines VS Code\'s display language.')}`,
-		`\t// ${localize('doc', 'See {0} for a list of supported languages.', 'https://go.microsoft.com/fwlink/?LinkId=761051')}`,
-		`\t`,
-		`\t"locale":"${language}" // ${localize('restart', 'Changes will not take effect until VS Code has been restarted.')}`,
-		'}'
-	].join('\n');
-
 	constructor(id: string, label: string,
-		@IFileService private readonly fileService: IFileService,
 		@IEnvironmentService private readonly environmentService: IEnvironmentService,
-		@IEditorService private readonly editorService: IEditorService,
-		@ILabelService private readonly labelService: ILabelService
+		@ILocalizationsService private readonly localizationService: ILocalizationsService,
+		@IQuickInputService private readonly quickInputService: IQuickInputService,
+		@IJSONEditingService private readonly jsonEditingService: IJSONEditingService,
+		@IHostService private readonly hostService: IHostService,
+		@INotificationService private readonly notificationService: INotificationService,
+		@IViewletService private readonly viewletService: IViewletService,
+		@IDialogService private readonly dialogService: IDialogService,
+		@IProductService private readonly productService: IProductService
 	) {
 		super(id, label);
 	}
 
-	public run(event?: any): Promise<IEditor | undefined> {
-		const file = URI.file(join(this.environmentService.appSettingsHome, 'locale.json'));
-		return this.fileService.resolveFile(file).then(undefined, (error) => {
-			return this.fileService.createFile(file, ConfigureLocaleAction.DEFAULT_CONTENT);
-		}).then((stat): Promise<IEditor | undefined> | undefined => {
-			if (!stat) {
-				return undefined;
+	private async getLanguageOptions(): Promise<IQuickPickItem[]> {
+		const availableLanguages = await this.localizationService.getLanguageIds();
+		availableLanguages.sort();
+
+		return availableLanguages
+			.map(language => { return { label: language }; })
+			.concat({ label: localize('installAdditionalLanguages', "Install additional languages...") });
+	}
+
+	public override async run(): Promise<void> {
+		const languageOptions = await this.getLanguageOptions();
+		const currentLanguageIndex = languageOptions.findIndex(l => l.label === language);
+
+		try {
+			const selectedLanguage = await this.quickInputService.pick(languageOptions,
+				{
+					canPickMany: false,
+					placeHolder: localize('chooseDisplayLanguage', "Select Display Language"),
+					activeItem: languageOptions[currentLanguageIndex]
+				});
+
+			if (selectedLanguage === languageOptions[languageOptions.length - 1]) {
+				return this.viewletService.openViewlet(EXTENSIONS_VIEWLET_ID, true)
+					.then(viewlet => viewlet?.getViewPaneContainer())
+					.then(viewlet => {
+						const extensionsViewlet = viewlet as IExtensionsViewPaneContainer;
+						extensionsViewlet.search('@category:"language packs"');
+						extensionsViewlet.focus();
+					});
 			}
-			return this.editorService.openEditor({
-				resource: stat.resource
-			});
-		}, (error) => {
-			throw new Error(localize('fail.createSettings', "Unable to create '{0}' ({1}).", this.labelService.getUriLabel(file, { relative: true }), error));
-		});
+
+			if (selectedLanguage) {
+				await this.jsonEditingService.write(this.environmentService.argvResource, [{ path: ['locale'], value: selectedLanguage.label }], true);
+				const restart = await this.dialogService.confirm({
+					type: 'info',
+					message: localize('relaunchDisplayLanguageMessage', "A restart is required for the change in display language to take effect."),
+					detail: localize('relaunchDisplayLanguageDetail', "Press the restart button to restart {0} and change the display language.", this.productService.nameLong),
+					primaryButton: localize('restart', "&&Restart")
+				});
+
+				if (restart.confirmed) {
+					this.hostService.restart();
+				}
+			}
+		} catch (e) {
+			this.notificationService.error(e);
+		}
 	}
 }

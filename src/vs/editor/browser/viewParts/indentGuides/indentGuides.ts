@@ -11,31 +11,41 @@ import { RenderingContext } from 'vs/editor/common/view/renderingContext';
 import { ViewContext } from 'vs/editor/common/view/viewContext';
 import * as viewEvents from 'vs/editor/common/view/viewEvents';
 import { registerThemingParticipant } from 'vs/platform/theme/common/themeService';
+import { EditorOption } from 'vs/editor/common/config/editorOptions';
+
 
 export class IndentGuidesOverlay extends DynamicViewOverlay {
 
-	private _context: ViewContext;
+	private readonly _context: ViewContext;
 	private _primaryLineNumber: number;
 	private _lineHeight: number;
 	private _spaceWidth: number;
 	private _renderResult: string[] | null;
 	private _enabled: boolean;
 	private _activeIndentEnabled: boolean;
+	private _maxIndentLeft: number;
 
 	constructor(context: ViewContext) {
 		super();
 		this._context = context;
 		this._primaryLineNumber = 0;
-		this._lineHeight = this._context.configuration.editor.lineHeight;
-		this._spaceWidth = this._context.configuration.editor.fontInfo.spaceWidth;
-		this._enabled = this._context.configuration.editor.viewInfo.renderIndentGuides;
-		this._activeIndentEnabled = this._context.configuration.editor.viewInfo.highlightActiveIndentGuide;
+
+		const options = this._context.configuration.options;
+		const wrappingInfo = options.get(EditorOption.wrappingInfo);
+		const fontInfo = options.get(EditorOption.fontInfo);
+
+		this._lineHeight = options.get(EditorOption.lineHeight);
+		this._spaceWidth = fontInfo.spaceWidth;
+		this._enabled = options.get(EditorOption.renderIndentGuides);
+		this._activeIndentEnabled = options.get(EditorOption.highlightActiveIndentGuide);
+		this._maxIndentLeft = wrappingInfo.wrappingColumn === -1 ? -1 : (wrappingInfo.wrappingColumn * fontInfo.typicalHalfwidthCharacterWidth);
+
 		this._renderResult = null;
 
 		this._context.addEventHandler(this);
 	}
 
-	public dispose(): void {
+	public override dispose(): void {
 		this._context.removeEventHandler(this);
 		this._renderResult = null;
 		super.dispose();
@@ -43,20 +53,19 @@ export class IndentGuidesOverlay extends DynamicViewOverlay {
 
 	// --- begin event handlers
 
-	public onConfigurationChanged(e: viewEvents.ViewConfigurationChangedEvent): boolean {
-		if (e.lineHeight) {
-			this._lineHeight = this._context.configuration.editor.lineHeight;
-		}
-		if (e.fontInfo) {
-			this._spaceWidth = this._context.configuration.editor.fontInfo.spaceWidth;
-		}
-		if (e.viewInfo) {
-			this._enabled = this._context.configuration.editor.viewInfo.renderIndentGuides;
-			this._activeIndentEnabled = this._context.configuration.editor.viewInfo.highlightActiveIndentGuide;
-		}
+	public override onConfigurationChanged(e: viewEvents.ViewConfigurationChangedEvent): boolean {
+		const options = this._context.configuration.options;
+		const wrappingInfo = options.get(EditorOption.wrappingInfo);
+		const fontInfo = options.get(EditorOption.fontInfo);
+
+		this._lineHeight = options.get(EditorOption.lineHeight);
+		this._spaceWidth = fontInfo.spaceWidth;
+		this._enabled = options.get(EditorOption.renderIndentGuides);
+		this._activeIndentEnabled = options.get(EditorOption.highlightActiveIndentGuide);
+		this._maxIndentLeft = wrappingInfo.wrappingColumn === -1 ? -1 : (wrappingInfo.wrappingColumn * fontInfo.typicalHalfwidthCharacterWidth);
 		return true;
 	}
-	public onCursorStateChanged(e: viewEvents.ViewCursorStateChangedEvent): boolean {
+	public override onCursorStateChanged(e: viewEvents.ViewCursorStateChangedEvent): boolean {
 		const selection = e.selections[0];
 		const newPrimaryLineNumber = selection.isEmpty() ? selection.positionLineNumber : 0;
 
@@ -67,29 +76,29 @@ export class IndentGuidesOverlay extends DynamicViewOverlay {
 
 		return false;
 	}
-	public onDecorationsChanged(e: viewEvents.ViewDecorationsChangedEvent): boolean {
+	public override onDecorationsChanged(e: viewEvents.ViewDecorationsChangedEvent): boolean {
 		// true for inline decorations
 		return true;
 	}
-	public onFlushed(e: viewEvents.ViewFlushedEvent): boolean {
+	public override onFlushed(e: viewEvents.ViewFlushedEvent): boolean {
 		return true;
 	}
-	public onLinesChanged(e: viewEvents.ViewLinesChangedEvent): boolean {
+	public override onLinesChanged(e: viewEvents.ViewLinesChangedEvent): boolean {
 		return true;
 	}
-	public onLinesDeleted(e: viewEvents.ViewLinesDeletedEvent): boolean {
+	public override onLinesDeleted(e: viewEvents.ViewLinesDeletedEvent): boolean {
 		return true;
 	}
-	public onLinesInserted(e: viewEvents.ViewLinesInsertedEvent): boolean {
+	public override onLinesInserted(e: viewEvents.ViewLinesInsertedEvent): boolean {
 		return true;
 	}
-	public onScrollChanged(e: viewEvents.ViewScrollChangedEvent): boolean {
+	public override onScrollChanged(e: viewEvents.ViewScrollChangedEvent): boolean {
 		return e.scrollTopChanged;// || e.scrollWidthChanged;
 	}
-	public onZonesChanged(e: viewEvents.ViewZonesChangedEvent): boolean {
+	public override onZonesChanged(e: viewEvents.ViewZonesChangedEvent): boolean {
 		return true;
 	}
-	public onLanguageConfigurationChanged(e: viewEvents.ViewLanguageConfigurationEvent): boolean {
+	public override onLanguageConfigurationChanged(e: viewEvents.ViewLanguageConfigurationEvent): boolean {
 		return true;
 	}
 
@@ -103,7 +112,7 @@ export class IndentGuidesOverlay extends DynamicViewOverlay {
 
 		const visibleStartLineNumber = ctx.visibleRange.startLineNumber;
 		const visibleEndLineNumber = ctx.visibleRange.endLineNumber;
-		const { indentSize } = this._context.model.getOptions();
+		const { indentSize } = this._context.model.getTextModelOptions();
 		const indentWidth = indentSize * this._spaceWidth;
 		const scrollWidth = ctx.scrollWidth;
 		const lineHeight = this._lineHeight;
@@ -120,21 +129,23 @@ export class IndentGuidesOverlay extends DynamicViewOverlay {
 			activeIndentLevel = activeIndentInfo.indent;
 		}
 
-		let output: string[] = [];
+		const output: string[] = [];
 		for (let lineNumber = visibleStartLineNumber; lineNumber <= visibleEndLineNumber; lineNumber++) {
 			const containsActiveIndentGuide = (activeIndentStartLineNumber <= lineNumber && lineNumber <= activeIndentEndLineNumber);
 			const lineIndex = lineNumber - visibleStartLineNumber;
 			const indent = indents[lineIndex];
 
 			let result = '';
-			let leftMostVisiblePosition = ctx.visibleRangeForPosition(new Position(lineNumber, 1));
-			let left = leftMostVisiblePosition ? leftMostVisiblePosition.left : 0;
-			for (let i = 1; i <= indent; i++) {
-				let className = (containsActiveIndentGuide && i === activeIndentLevel ? 'cigra' : 'cigr');
-				result += `<div class="${className}" style="left:${left}px;height:${lineHeight}px;width:${indentWidth}px"></div>`;
-				left += indentWidth;
-				if (left > scrollWidth) {
-					break;
+			if (indent >= 1) {
+				const leftMostVisiblePosition = ctx.visibleRangeForPosition(new Position(lineNumber, 1));
+				let left = leftMostVisiblePosition ? leftMostVisiblePosition.left : 0;
+				for (let i = 1; i <= indent; i++) {
+					const className = (containsActiveIndentGuide && i === activeIndentLevel ? 'cigra' : 'cigr');
+					result += `<div class="${className}" style="left:${left}px;height:${lineHeight}px;width:${indentWidth}px"></div>`;
+					left += indentWidth;
+					if (left > scrollWidth || (this._maxIndentLeft > 0 && left > this._maxIndentLeft)) {
+						break;
+					}
 				}
 			}
 
@@ -147,7 +158,7 @@ export class IndentGuidesOverlay extends DynamicViewOverlay {
 		if (!this._renderResult) {
 			return '';
 		}
-		let lineIndex = lineNumber - startLineNumber;
+		const lineIndex = lineNumber - startLineNumber;
 		if (lineIndex < 0 || lineIndex >= this._renderResult.length) {
 			return '';
 		}

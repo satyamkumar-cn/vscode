@@ -5,6 +5,7 @@
   "displayName": "%displayName%",
   "version": "1.0.0",
   "icon": "images/gulp.png",
+  "license": "MIT",
   "engines": {
     "vscode": "*"
   },
@@ -19,12 +20,18 @@
     "vscode-nls": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^10.12.21"
+    "@types/node": "^12.19.9"
   },
   "main": "./out/main",
   "activationEvents": [
     "onCommand:workbench.action.tasks.runTask"
   ],
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "contributes": {
     "configuration": {
       "id": "gulp",
@@ -58,8 +65,13 @@
             "type": "string",
             "description": "%gulp.taskDefinition.file.description%"
           }
-        }
+        },
+        "when": "shellExecutionSupported"
       }
     ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
   }
 }

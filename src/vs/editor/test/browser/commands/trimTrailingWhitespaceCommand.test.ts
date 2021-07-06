@@ -28,7 +28,8 @@ function createInsertDeleteSingleEditOp(text: string | null, positionLineNumber:
 export function createSingleEditOp(text: string | null, positionLineNumber: number, positionColumn: number, selectionLineNumber: number = positionLineNumber, selectionColumn: number = positionColumn): IIdentifiedSingleEditOperation {
 	return {
 		range: new Range(selectionLineNumber, selectionColumn, positionLineNumber, positionColumn),
-		text: text
+		text: text,
+		forceMoveMarkers: false
 	};
 }
 
@@ -36,14 +37,14 @@ function assertTrimTrailingWhitespaceCommand(text: string[], expected: IIdentifi
 	return withEditorModel(text, (model) => {
 		let op = new TrimTrailingWhitespaceCommand(new Selection(1, 1, 1, 1), []);
 		let actual = getEditOperation(model, op);
-		assert.deepEqual(actual, expected);
+		assert.deepStrictEqual(actual, expected);
 	});
 }
 
 function assertTrimTrailingWhitespace(text: string[], cursors: Position[], expected: IIdentifiedSingleEditOperation[]): void {
 	return withEditorModel(text, (model) => {
 		let actual = trimTrailingWhitespace(model, cursors);
-		assert.deepEqual(actual, expected);
+		assert.deepStrictEqual(actual, expected);
 	});
 }
 
@@ -63,11 +64,11 @@ suite('Editor Commands - Trim Trailing Whitespace Command', () => {
 			'even more text  ',
 			'and some mixed\t   \t'
 		], [
-				createSingleEditOp(null, 1, 10, 1, 11),
-				createSingleEditOp(null, 3, 1, 3, 4),
-				createSingleEditOp(null, 4, 15, 4, 17),
-				createSingleEditOp(null, 5, 15, 5, 20)
-			]);
+			createSingleEditOp(null, 1, 10, 1, 11),
+			createSingleEditOp(null, 3, 1, 3, 4),
+			createSingleEditOp(null, 4, 15, 4, 17),
+			createSingleEditOp(null, 5, 15, 5, 20)
+		]);
 
 
 		assertTrimTrailingWhitespace(['text   '], [new Position(1, 1), new Position(1, 2), new Position(1, 3)], [createInsertDeleteSingleEditOp(null, 1, 5, 1, 8)]);
@@ -80,11 +81,11 @@ suite('Editor Commands - Trim Trailing Whitespace Command', () => {
 			'even more text  ',
 			'and some mixed\t   \t'
 		], [], [
-				createInsertDeleteSingleEditOp(null, 1, 10, 1, 11),
-				createInsertDeleteSingleEditOp(null, 3, 1, 3, 4),
-				createInsertDeleteSingleEditOp(null, 4, 15, 4, 17),
-				createInsertDeleteSingleEditOp(null, 5, 15, 5, 20)
-			]);
+			createInsertDeleteSingleEditOp(null, 1, 10, 1, 11),
+			createInsertDeleteSingleEditOp(null, 3, 1, 3, 4),
+			createInsertDeleteSingleEditOp(null, 4, 15, 4, 17),
+			createInsertDeleteSingleEditOp(null, 5, 15, 5, 20)
+		]);
 		assertTrimTrailingWhitespace([
 			'some text\t',
 			'some more text',
@@ -92,10 +93,10 @@ suite('Editor Commands - Trim Trailing Whitespace Command', () => {
 			'even more text  ',
 			'and some mixed\t   \t'
 		], [new Position(1, 11), new Position(3, 2), new Position(5, 1), new Position(4, 1), new Position(5, 10)], [
-				createInsertDeleteSingleEditOp(null, 3, 2, 3, 4),
-				createInsertDeleteSingleEditOp(null, 4, 15, 4, 17),
-				createInsertDeleteSingleEditOp(null, 5, 15, 5, 20)
-			]);
+			createInsertDeleteSingleEditOp(null, 3, 2, 3, 4),
+			createInsertDeleteSingleEditOp(null, 4, 15, 4, 17),
+			createInsertDeleteSingleEditOp(null, 5, 15, 5, 20)
+		]);
 	});
 
 });

@@ -36,8 +36,8 @@ export class LanguagesRegistry extends Disposable {
 	private readonly _warnOnOverwrite: boolean;
 
 	private _nextLanguageId2: number;
-	private _languageIdToLanguage: string[];
-	private _languageToLanguageId: { [id: string]: number; };
+	private readonly _languageIdToLanguage: string[];
+	private readonly _languageToLanguageId: { [id: string]: number; };
 
 	private _languages: { [id: string]: IResolvedLanguage; };
 	private _mimeTypesMap: { [mimeType: string]: LanguageIdentifier; };
@@ -153,9 +153,14 @@ export class LanguagesRegistry extends Disposable {
 		}
 
 		if (Array.isArray(lang.extensions)) {
+			if (lang.configuration) {
+				// insert first as this appears to be the 'primary' language definition
+				resolvedLanguage.extensions = lang.extensions.concat(resolvedLanguage.extensions);
+			} else {
+				resolvedLanguage.extensions = resolvedLanguage.extensions.concat(lang.extensions);
+			}
 			for (let extension of lang.extensions) {
 				mime.registerTextMime({ id: langId, mime: primaryMime, extension: extension }, this._warnOnOverwrite);
-				resolvedLanguage.extensions.push(extension);
 			}
 		}
 
@@ -322,11 +327,11 @@ export class LanguagesRegistry extends Disposable {
 		return [];
 	}
 
-	public getModeIdsFromFilepathOrFirstLine(filepath: string | null, firstLine?: string): string[] {
-		if (!filepath && !firstLine) {
+	public getModeIdsFromFilepathOrFirstLine(resource: URI | null, firstLine?: string): string[] {
+		if (!resource && !firstLine) {
 			return [];
 		}
-		let mimeTypes = mime.guessMimeTypes(filepath, firstLine);
+		let mimeTypes = mime.guessMimeTypes(resource, firstLine);
 		return this.extractModeIds(mimeTypes.join(','));
 	}
 

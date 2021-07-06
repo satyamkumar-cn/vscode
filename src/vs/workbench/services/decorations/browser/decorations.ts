@@ -9,28 +9,28 @@ import { Event } from 'vs/base/common/event';
 import { ColorIdentifier } from 'vs/platform/theme/common/colorRegistry';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { CancellationToken } from 'vs/base/common/cancellation';
+import { ThemeIcon } from 'vs/platform/theme/common/themeService';
 
 export const IDecorationsService = createDecorator<IDecorationsService>('IFileDecorationsService');
 
 export interface IDecorationData {
 	readonly weight?: number;
 	readonly color?: ColorIdentifier;
-	readonly letter?: string;
+	readonly letter?: string | ThemeIcon;
 	readonly tooltip?: string;
 	readonly bubble?: boolean;
-	readonly source?: string;
 }
 
-export interface IDecoration {
+export interface IDecoration extends IDisposable {
 	readonly tooltip: string;
 	readonly labelClassName: string;
 	readonly badgeClassName: string;
-	update(data: IDecorationData): IDecoration;
+	readonly iconClassName: string;
 }
 
 export interface IDecorationsProvider {
 	readonly label: string;
-	readonly onDidChange: Event<URI[]>;
+	readonly onDidChange: Event<readonly URI[]>;
 	provideDecorations(uri: URI, token: CancellationToken): IDecorationData | Promise<IDecorationData | undefined> | undefined;
 }
 
@@ -40,11 +40,11 @@ export interface IResourceDecorationChangeEvent {
 
 export interface IDecorationsService {
 
-	readonly _serviceBrand: any;
+	readonly _serviceBrand: undefined;
 
 	readonly onDidChangeDecorations: Event<IResourceDecorationChangeEvent>;
 
 	registerDecorationsProvider(provider: IDecorationsProvider): IDisposable;
 
-	getDecoration(uri: URI, includeChildren: boolean, overwrite?: IDecorationData): IDecoration | undefined;
+	getDecoration(uri: URI, includeChildren: boolean): IDecoration | undefined;
 }

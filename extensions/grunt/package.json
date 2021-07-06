@@ -5,6 +5,7 @@
   "displayName": "Grunt support for VS Code",
   "version": "1.0.0",
   "icon": "images/grunt.png",
+  "license": "MIT",
   "engines": {
     "vscode": "*"
   },
@@ -19,12 +20,18 @@
     "vscode-nls": "^4.0.0"
   },
   "devDependencies": {
-    "@types/node": "^10.12.21"
+    "@types/node": "^12.19.9"
   },
   "main": "./out/main",
   "activationEvents": [
     "onCommand:workbench.action.tasks.runTask"
   ],
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "contributes": {
     "configuration": {
       "id": "grunt",
@@ -54,12 +61,21 @@
             "type": "string",
             "description": "%grunt.taskDefinition.type.description%"
           },
+          "args": {
+            "type": "array",
+            "description": "%grunt.taskDefinition.args.description%"
+          },
           "file": {
             "type": "string",
             "description": "%grunt.taskDefinition.file.description%"
           }
-        }
+        },
+        "when": "shellExecutionSupported"
       }
     ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
   }
 }

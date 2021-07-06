@@ -4,42 +4,46 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { assign } from 'vs/base/common/objects';
 import { generateUuid } from 'vs/base/common/uuid';
-import { ExtensionsListView } from 'vs/workbench/contrib/extensions/electron-browser/extensionsViews';
+import { ExtensionsListView } from 'vs/workbench/contrib/extensions/browser/extensionsViews';
 import { TestInstantiationService } from 'vs/platform/instantiation/test/common/instantiationServiceMock';
 import { IExtensionsWorkbenchService } from 'vs/workbench/contrib/extensions/common/extensions';
-import { ExtensionsWorkbenchService } from 'vs/workbench/contrib/extensions/node/extensionsWorkbenchService';
+import { ExtensionsWorkbenchService } from 'vs/workbench/contrib/extensions/browser/extensionsWorkbenchService';
 import {
-	IExtensionManagementService, IExtensionGalleryService, IExtensionEnablementService, IExtensionTipsService, ILocalExtension, IGalleryExtension, IQueryOptions,
-	DidInstallExtensionEvent, DidUninstallExtensionEvent, InstallExtensionEvent, IExtensionIdentifier, IExtensionManagementServerService, IExtensionManagementServer, EnablementState, ExtensionRecommendationReason, SortBy
+	IExtensionManagementService, IExtensionGalleryService, ILocalExtension, IGalleryExtension, IQueryOptions,
+	DidInstallExtensionEvent, DidUninstallExtensionEvent, InstallExtensionEvent, IExtensionIdentifier, SortBy
 } from 'vs/platform/extensionManagement/common/extensionManagement';
+import { IWorkbenchExtensionEnablementService, EnablementState, IExtensionManagementServerService, IExtensionManagementServer } from 'vs/workbench/services/extensionManagement/common/extensionManagement';
+import { IExtensionRecommendationsService, ExtensionRecommendationReason } from 'vs/workbench/services/extensionRecommendations/common/extensionRecommendations';
 import { getGalleryExtensionId } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
-import { ExtensionManagementService } from 'vs/platform/extensionManagement/node/extensionManagementService';
-import { ExtensionTipsService } from 'vs/workbench/contrib/extensions/electron-browser/extensionTipsService';
-import { TestExtensionEnablementService } from 'vs/platform/extensionManagement/test/electron-browser/extensionEnablementService.test';
-import { ExtensionGalleryService } from 'vs/platform/extensionManagement/node/extensionGalleryService';
+import { TestExtensionEnablementService } from 'vs/workbench/services/extensionManagement/test/browser/extensionEnablementService.test';
+import { ExtensionGalleryService } from 'vs/platform/extensionManagement/common/extensionGalleryService';
 import { IURLService } from 'vs/platform/url/common/url';
-import { Emitter } from 'vs/base/common/event';
+import { Emitter, Event } from 'vs/base/common/event';
 import { IPager } from 'vs/base/common/paging';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { NullTelemetryService } from 'vs/platform/telemetry/common/telemetryUtils';
-import { IExtensionService } from 'vs/workbench/services/extensions/common/extensions';
+import { IExtensionService, toExtensionDescription } from 'vs/workbench/services/extensions/common/extensions';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
-import { TestContextService, TestWindowService } from 'vs/workbench/test/workbenchTestServices';
+import { TestMenuService } from 'vs/workbench/test/browser/workbenchTestServices';
+import { TestSharedProcessService } from 'vs/workbench/test/electron-browser/workbenchTestServices';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ILogService, NullLogService } from 'vs/platform/log/common/log';
-import { IWindowService } from 'vs/platform/windows/common/windows';
-import { URLService } from 'vs/platform/url/common/urlService';
+import { NativeURLService } from 'vs/platform/url/common/urlService';
 import { URI } from 'vs/base/common/uri';
 import { TestConfigurationService } from 'vs/platform/configuration/test/common/testConfigurationService';
 import { SinonStub } from 'sinon';
-import { IExperimentService, ExperimentService, ExperimentState, ExperimentActionType } from 'vs/workbench/contrib/experiments/node/experimentService';
-import { IRemoteAgentService } from 'vs/workbench/services/remote/node/remoteAgentService';
-import { RemoteAgentService } from 'vs/workbench/services/remote/electron-browser/remoteAgentServiceImpl';
-import { ExtensionManagementServerService } from 'vs/workbench/services/extensions/node/extensionManagementServerService';
-import { ExtensionIdentifier, ExtensionType } from 'vs/platform/extensions/common/extensions';
-
+import { IExperimentService, ExperimentState, ExperimentActionType, ExperimentService } from 'vs/workbench/contrib/experiments/common/experimentService';
+import { IRemoteAgentService } from 'vs/workbench/services/remote/common/remoteAgentService';
+import { RemoteAgentService } from 'vs/workbench/services/remote/electron-sandbox/remoteAgentServiceImpl';
+import { ExtensionType, IExtension, IExtensionDescription } from 'vs/platform/extensions/common/extensions';
+import { ISharedProcessService } from 'vs/platform/ipc/electron-sandbox/services';
+import { IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
+import { MockContextKeyService } from 'vs/platform/keybinding/test/common/mockKeybindingService';
+import { IMenuService } from 'vs/platform/actions/common/actions';
+import { TestContextService } from 'vs/workbench/test/common/workbenchTestServices';
+import { IViewDescriptorService, ViewContainerLocation } from 'vs/workbench/common/views';
+import { Schemas } from 'vs/base/common/network';
 
 suite('ExtensionsListView Tests', () => {
 
@@ -60,6 +64,8 @@ suite('ExtensionsListView Tests', () => {
 
 	const workspaceRecommendationA = aGalleryExtension('workspace-recommendation-A');
 	const workspaceRecommendationB = aGalleryExtension('workspace-recommendation-B');
+	const configBasedRecommendationA = aGalleryExtension('configbased-recommendation-A');
+	const configBasedRecommendationB = aGalleryExtension('configbased-recommendation-B');
 	const fileBasedRecommendationA = aGalleryExtension('filebased-recommendation-A');
 	const fileBasedRecommendationB = aGalleryExtension('filebased-recommendation-B');
 	const otherRecommendationA = aGalleryExtension('other-recommendation-A');
@@ -73,46 +79,81 @@ suite('ExtensionsListView Tests', () => {
 		instantiationService = new TestInstantiationService();
 		instantiationService.stub(ITelemetryService, NullTelemetryService);
 		instantiationService.stub(ILogService, NullLogService);
-		instantiationService.stub(IWindowService, TestWindowService);
 
 		instantiationService.stub(IWorkspaceContextService, new TestContextService());
 		instantiationService.stub(IConfigurationService, new TestConfigurationService());
 
 		instantiationService.stub(IExtensionGalleryService, ExtensionGalleryService);
+		instantiationService.stub(ISharedProcessService, TestSharedProcessService);
 		instantiationService.stub(IExperimentService, ExperimentService);
 
-		instantiationService.stub(IExtensionManagementService, ExtensionManagementService);
-		instantiationService.stub(IExtensionManagementService, 'onInstallExtension', installEvent.event);
-		instantiationService.stub(IExtensionManagementService, 'onDidInstallExtension', didInstallEvent.event);
-		instantiationService.stub(IExtensionManagementService, 'onUninstallExtension', uninstallEvent.event);
-		instantiationService.stub(IExtensionManagementService, 'onDidUninstallExtension', didUninstallEvent.event);
+		instantiationService.stub(IExtensionManagementService, <Partial<IExtensionManagementService>>{
+			onInstallExtension: installEvent.event,
+			onDidInstallExtension: didInstallEvent.event,
+			onUninstallExtension: uninstallEvent.event,
+			onDidUninstallExtension: didUninstallEvent.event,
+			async getInstalled() { return []; },
+			async canInstall() { return true; },
+			async getExtensionsReport() { return []; },
+		});
 		instantiationService.stub(IRemoteAgentService, RemoteAgentService);
+		instantiationService.stub(IContextKeyService, new MockContextKeyService());
+		instantiationService.stub(IMenuService, new TestMenuService());
 
-		instantiationService.stub(IExtensionManagementServerService, instantiationService.createInstance(ExtensionManagementServerService, <IExtensionManagementServer>{ authority: 'vscode-local', extensionManagementService: instantiationService.get(IExtensionManagementService), label: 'local' }));
+		const localExtensionManagementServer = { extensionManagementService: instantiationService.get(IExtensionManagementService), label: 'local', id: 'vscode-local' };
+		instantiationService.stub(IExtensionManagementServerService, <Partial<IExtensionManagementServerService>>{
+			get localExtensionManagementServer(): IExtensionManagementServer {
+				return localExtensionManagementServer;
+			},
+			getExtensionManagementServer(extension: IExtension): IExtensionManagementServer | null {
+				if (extension.location.scheme === Schemas.file) {
+					return localExtensionManagementServer;
+				}
+				throw new Error(`Invalid Extension ${extension.location}`);
+			}
+		});
 
-		instantiationService.stub(IExtensionEnablementService, new TestExtensionEnablementService(instantiationService));
+		instantiationService.stub(IWorkbenchExtensionEnablementService, new TestExtensionEnablementService(instantiationService));
 
-		instantiationService.stub(IExtensionTipsService, ExtensionTipsService);
-		instantiationService.stub(IURLService, URLService);
-
-		instantiationService.stubPromise(IExtensionTipsService, 'getWorkspaceRecommendations', [
-			{ extensionId: workspaceRecommendationA.identifier.id },
-			{ extensionId: workspaceRecommendationB.identifier.id }]);
-		instantiationService.stub(IExtensionTipsService, 'getFileBasedRecommendations', [
-			{ extensionId: fileBasedRecommendationA.identifier.id },
-			{ extensionId: fileBasedRecommendationB.identifier.id }]);
-		instantiationService.stubPromise(IExtensionTipsService, 'getOtherRecommendations', [
-			{ extensionId: otherRecommendationA.identifier.id }
-		]);
-		const reasons = {};
+		const reasons: { [key: string]: any } = {};
 		reasons[workspaceRecommendationA.identifier.id] = { reasonId: ExtensionRecommendationReason.Workspace };
 		reasons[workspaceRecommendationB.identifier.id] = { reasonId: ExtensionRecommendationReason.Workspace };
 		reasons[fileBasedRecommendationA.identifier.id] = { reasonId: ExtensionRecommendationReason.File };
 		reasons[fileBasedRecommendationB.identifier.id] = { reasonId: ExtensionRecommendationReason.File };
 		reasons[otherRecommendationA.identifier.id] = { reasonId: ExtensionRecommendationReason.Executable };
-
-		instantiationService.stub(IExtensionTipsService, 'getAllRecommendationsWithReason', reasons);
-
+		reasons[configBasedRecommendationA.identifier.id] = { reasonId: ExtensionRecommendationReason.WorkspaceConfig };
+		instantiationService.stub(IExtensionRecommendationsService, <Partial<IExtensionRecommendationsService>>{
+			getWorkspaceRecommendations() {
+				return Promise.resolve([
+					workspaceRecommendationA.identifier.id,
+					workspaceRecommendationB.identifier.id]);
+			},
+			getConfigBasedRecommendations() {
+				return Promise.resolve({
+					important: [configBasedRecommendationA.identifier.id],
+					others: [configBasedRecommendationB.identifier.id],
+				});
+			},
+			getImportantRecommendations(): Promise<string[]> {
+				return Promise.resolve([]);
+			},
+			getFileBasedRecommendations() {
+				return [
+					fileBasedRecommendationA.identifier.id,
+					fileBasedRecommendationB.identifier.id
+				];
+			},
+			getOtherRecommendations() {
+				return Promise.resolve([
+					configBasedRecommendationB.identifier.id,
+					otherRecommendationA.identifier.id
+				]);
+			},
+			getAllRecommendationsWithReason() {
+				return reasons;
+			}
+		});
+		instantiationService.stub(IURLService, NativeURLService);
 	});
 
 	setup(async () => {
@@ -121,22 +162,30 @@ suite('ExtensionsListView Tests', () => {
 		instantiationService.stubPromise(IExtensionGalleryService, 'query', aPage());
 		instantiationService.stubPromise(IExperimentService, 'getExperimentsByType', []);
 
-		instantiationService.stub(IExtensionService, {
-			getExtensions: () => {
+		instantiationService.stub(IViewDescriptorService, {
+			getViewLocationById(): ViewContainerLocation {
+				return ViewContainerLocation.Sidebar;
+			},
+			onDidChangeLocation: Event.None
+		});
+
+		instantiationService.stub(IExtensionService, <Partial<IExtensionService>>{
+			onDidChangeExtensions: Event.None,
+			getExtensions: (): Promise<IExtensionDescription[]> => {
 				return Promise.resolve([
-					{ identifier: new ExtensionIdentifier(localEnabledTheme.identifier.id) },
-					{ identifier: new ExtensionIdentifier(localEnabledLanguage.identifier.id) },
-					{ identifier: new ExtensionIdentifier(localRandom.identifier.id) },
-					{ identifier: new ExtensionIdentifier(builtInTheme.identifier.id) },
-					{ identifier: new ExtensionIdentifier(builtInBasic.identifier.id) }
+					toExtensionDescription(localEnabledTheme),
+					toExtensionDescription(localEnabledLanguage),
+					toExtensionDescription(localRandom),
+					toExtensionDescription(builtInTheme),
+					toExtensionDescription(builtInBasic)
 				]);
 			}
 		});
-		await (<TestExtensionEnablementService>instantiationService.get(IExtensionEnablementService)).setEnablement([localDisabledTheme], EnablementState.Disabled);
-		await (<TestExtensionEnablementService>instantiationService.get(IExtensionEnablementService)).setEnablement([localDisabledLanguage], EnablementState.Disabled);
+		await (<TestExtensionEnablementService>instantiationService.get(IWorkbenchExtensionEnablementService)).setEnablement([localDisabledTheme], EnablementState.DisabledGlobally);
+		await (<TestExtensionEnablementService>instantiationService.get(IWorkbenchExtensionEnablementService)).setEnablement([localDisabledLanguage], EnablementState.DisabledGlobally);
 
 		instantiationService.set(IExtensionsWorkbenchService, instantiationService.createInstance(ExtensionsWorkbenchService));
-		testableView = instantiationService.createInstance(ExtensionsListView, {});
+		testableView = instantiationService.createInstance(ExtensionsListView, {}, {});
 	});
 
 	teardown(() => {
@@ -145,15 +194,15 @@ suite('ExtensionsListView Tests', () => {
 	});
 
 	test('Test query types', () => {
-		assert.equal(ExtensionsListView.isBuiltInExtensionsQuery('@builtin'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@installed'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@enabled'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@disabled'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@outdated'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@installed searchText'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@enabled searchText'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@disabled searchText'), true);
-		assert.equal(ExtensionsListView.isInstalledExtensionsQuery('@outdated searchText'), true);
+		assert.strictEqual(ExtensionsListView.isBuiltInExtensionsQuery('@builtin'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@installed'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@enabled'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@disabled'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@outdated'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@installed searchText'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@enabled searchText'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@disabled searchText'), true);
+		assert.strictEqual(ExtensionsListView.isLocalExtensionsQuery('@outdated searchText'), true);
 	});
 
 	test('Test empty query equates to sort by install count', () => {
@@ -161,7 +210,7 @@ suite('ExtensionsListView Tests', () => {
 		return testableView.show('').then(() => {
 			assert.ok(target.calledOnce);
 			const options: IQueryOptions = target.args[0][0];
-			assert.equal(options.sortBy, SortBy.InstallCount);
+			assert.strictEqual(options.sortBy, SortBy.InstallCount);
 		});
 	});
 
@@ -170,7 +219,7 @@ suite('ExtensionsListView Tests', () => {
 		return testableView.show('some extension').then(() => {
 			assert.ok(target.calledOnce);
 			const options: IQueryOptions = target.args[0][0];
-			assert.equal(options.sortBy, undefined);
+			assert.strictEqual(options.sortBy, undefined);
 		});
 	});
 
@@ -179,156 +228,134 @@ suite('ExtensionsListView Tests', () => {
 		return testableView.show('some extension @sort:rating').then(() => {
 			assert.ok(target.calledOnce);
 			const options: IQueryOptions = target.args[0][0];
-			assert.equal(options.sortBy, SortBy.WeightedRating);
+			assert.strictEqual(options.sortBy, SortBy.WeightedRating);
 		});
 	});
 
-	test('Test installed query results', () => {
-		const allInstalledCheck = testableView.show('@installed').then(result => {
-			assert.equal(result.length, 5, 'Unexpected number of results for @installed query');
+	test('Test installed query results', async () => {
+		await testableView.show('@installed').then(result => {
+			assert.strictEqual(result.length, 5, 'Unexpected number of results for @installed query');
 			const actual = [result.get(0).name, result.get(1).name, result.get(2).name, result.get(3).name, result.get(4).name].sort();
 			const expected = [localDisabledTheme.manifest.name, localEnabledTheme.manifest.name, localRandom.manifest.name, localDisabledLanguage.manifest.name, localEnabledLanguage.manifest.name];
 			for (let i = 0; i < result.length; i++) {
-				assert.equal(actual[i], expected[i], 'Unexpected extension for @installed query.');
+				assert.strictEqual(actual[i], expected[i], 'Unexpected extension for @installed query.');
 			}
 		});
 
-		const installedCheck = testableView.show('@installed first').then(result => {
-			assert.equal(result.length, 2, 'Unexpected number of results for @installed query');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with search text.');
-			assert.equal(result.get(1).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with search text.');
+		await testableView.show('@installed first').then(result => {
+			assert.strictEqual(result.length, 2, 'Unexpected number of results for @installed query');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with search text.');
+			assert.strictEqual(result.get(1).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with search text.');
 		});
 
-		const allDisabledCheck = testableView.show('@disabled').then(result => {
-			assert.equal(result.length, 2, 'Unexpected number of results for @disabled query');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @disabled query.');
-			assert.equal(result.get(1).name, localDisabledLanguage.manifest.name, 'Unexpected extension for @disabled query.');
+		await testableView.show('@disabled').then(result => {
+			assert.strictEqual(result.length, 2, 'Unexpected number of results for @disabled query');
+			assert.strictEqual(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @disabled query.');
+			assert.strictEqual(result.get(1).name, localDisabledLanguage.manifest.name, 'Unexpected extension for @disabled query.');
 		});
 
-		const allEnabledCheck = testableView.show('@enabled').then(result => {
-			assert.equal(result.length, 3, 'Unexpected number of results for @enabled query');
-			assert.equal(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @enabled query.');
-			assert.equal(result.get(1).name, localRandom.manifest.name, 'Unexpected extension for @enabled query.');
-			assert.equal(result.get(2).name, localEnabledLanguage.manifest.name, 'Unexpected extension for @enabled query.');
+		await testableView.show('@enabled').then(result => {
+			assert.strictEqual(result.length, 3, 'Unexpected number of results for @enabled query');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @enabled query.');
+			assert.strictEqual(result.get(1).name, localRandom.manifest.name, 'Unexpected extension for @enabled query.');
+			assert.strictEqual(result.get(2).name, localEnabledLanguage.manifest.name, 'Unexpected extension for @enabled query.');
 		});
 
-		const allBuiltinThemesCheck = testableView.show('@builtin:themes').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @builtin:themes query');
-			assert.equal(result.get(0).name, builtInTheme.manifest.name, 'Unexpected extension for @builtin:themes query.');
+		await testableView.show('@builtin:themes').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @builtin:themes query');
+			assert.strictEqual(result.get(0).name, builtInTheme.manifest.name, 'Unexpected extension for @builtin:themes query.');
 		});
 
-		const allBuiltinBasicsCheck = testableView.show('@builtin:basics').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @builtin:basics query');
-			assert.equal(result.get(0).name, builtInBasic.manifest.name, 'Unexpected extension for @builtin:basics query.');
+		await testableView.show('@builtin:basics').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @builtin:basics query');
+			assert.strictEqual(result.get(0).name, builtInBasic.manifest.name, 'Unexpected extension for @builtin:basics query.');
 		});
 
-		const allBuiltinCheck = testableView.show('@builtin').then(result => {
-			assert.equal(result.length, 2, 'Unexpected number of results for @builtin query');
-			assert.equal(result.get(0).name, builtInBasic.manifest.name, 'Unexpected extension for @builtin query.');
-			assert.equal(result.get(1).name, builtInTheme.manifest.name, 'Unexpected extension for @builtin query.');
+		await testableView.show('@builtin').then(result => {
+			assert.strictEqual(result.length, 2, 'Unexpected number of results for @builtin query');
+			assert.strictEqual(result.get(0).name, builtInBasic.manifest.name, 'Unexpected extension for @builtin query.');
+			assert.strictEqual(result.get(1).name, builtInTheme.manifest.name, 'Unexpected extension for @builtin query.');
 		});
 
-		const builtinCheck = testableView.show('@builtin my-theme').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @builtin query');
-			assert.equal(result.get(0).name, builtInTheme.manifest.name, 'Unexpected extension for @builtin query.');
+		await testableView.show('@builtin my-theme').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @builtin query');
+			assert.strictEqual(result.get(0).name, builtInTheme.manifest.name, 'Unexpected extension for @builtin query.');
 		});
-
-		return Promise.all([
-			allInstalledCheck,
-			installedCheck,
-			allDisabledCheck,
-			allEnabledCheck,
-			allBuiltinThemesCheck,
-			allBuiltinBasicsCheck,
-			allBuiltinCheck,
-			builtinCheck]);
 	});
 
-	test('Test installed query with category', () => {
-		const installedCategoryWithoutQuotesCheck = testableView.show('@installed category:themes').then(result => {
-			assert.equal(result.length, 2, 'Unexpected number of results for @installed query with category');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with category.');
-			assert.equal(result.get(1).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with category.');
+	test('Test installed query with category', async () => {
+		await testableView.show('@installed category:themes').then(result => {
+			assert.strictEqual(result.length, 2, 'Unexpected number of results for @installed query with category');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with category.');
+			assert.strictEqual(result.get(1).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with category.');
 		});
 
-		const installedCategoryWithQuotesCheck = testableView.show('@installed category:"themes"').then(result => {
-			assert.equal(result.length, 2, 'Unexpected number of results for @installed query with quoted category');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with quoted category.');
-			assert.equal(result.get(1).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with quoted category.');
+		await testableView.show('@installed category:"themes"').then(result => {
+			assert.strictEqual(result.length, 2, 'Unexpected number of results for @installed query with quoted category');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with quoted category.');
+			assert.strictEqual(result.get(1).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with quoted category.');
 		});
 
-		const installedCategoryWithSpaceCheck = testableView.show('@installed category:"programming languages"').then(result => {
-			assert.equal(result.length, 2, 'Unexpected number of results for @installed query with quoted category including space');
-			assert.equal(result.get(0).name, localDisabledLanguage.manifest.name, 'Unexpected extension for @installed query with quoted category inlcuding space.');
-			assert.equal(result.get(1).name, localEnabledLanguage.manifest.name, 'Unexpected extension for @installed query with quoted category including space.');
+		await testableView.show('@installed category:"programming languages"').then(result => {
+			assert.strictEqual(result.length, 2, 'Unexpected number of results for @installed query with quoted category including space');
+			assert.strictEqual(result.get(0).name, localEnabledLanguage.manifest.name, 'Unexpected extension for @installed query with quoted category including space.');
+			assert.strictEqual(result.get(1).name, localDisabledLanguage.manifest.name, 'Unexpected extension for @installed query with quoted category inlcuding space.');
 		});
 
-		const installedMultipleCategoryCheck = testableView.show('@installed category:themes category:random').then(result => {
-			assert.equal(result.length, 3, 'Unexpected number of results for @installed query with multiple category');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with multiple category.');
-			assert.equal(result.get(1).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with multiple category.');
-			assert.equal(result.get(2).name, localRandom.manifest.name, 'Unexpected extension for @installed query with multiple category.');
+		await testableView.show('@installed category:themes category:random').then(result => {
+			assert.strictEqual(result.length, 3, 'Unexpected number of results for @installed query with multiple category');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @installed query with multiple category.');
+			assert.strictEqual(result.get(1).name, localRandom.manifest.name, 'Unexpected extension for @installed query with multiple category.');
+			assert.strictEqual(result.get(2).name, localDisabledTheme.manifest.name, 'Unexpected extension for @installed query with multiple category.');
 		});
 
-		const enabledCategoryWithoutQuotesCheck = testableView.show('@enabled category:themes').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @enabled query with category');
-			assert.equal(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @enabled query with category.');
+		await testableView.show('@enabled category:themes').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @enabled query with category');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @enabled query with category.');
 		});
 
-		const enabledCategoryWithQuotesCheck = testableView.show('@enabled category:"themes"').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @enabled query with quoted category');
-			assert.equal(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @enabled query with quoted category.');
+		await testableView.show('@enabled category:"themes"').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @enabled query with quoted category');
+			assert.strictEqual(result.get(0).name, localEnabledTheme.manifest.name, 'Unexpected extension for @enabled query with quoted category.');
 		});
 
-		const enabledCategoryWithSpaceCheck = testableView.show('@enabled category:"programming languages"').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @enabled query with quoted category inlcuding space');
-			assert.equal(result.get(0).name, localEnabledLanguage.manifest.name, 'Unexpected extension for @enabled query with quoted category including space.');
+		await testableView.show('@enabled category:"programming languages"').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @enabled query with quoted category inlcuding space');
+			assert.strictEqual(result.get(0).name, localEnabledLanguage.manifest.name, 'Unexpected extension for @enabled query with quoted category including space.');
 		});
 
-		const disabledCategoryWithoutQuotesCheck = testableView.show('@disabled category:themes').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @disabled query with category');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @disabled query with category.');
+		await testableView.show('@disabled category:themes').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @disabled query with category');
+			assert.strictEqual(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @disabled query with category.');
 		});
 
-		const disabledCategoryWithQuotesCheck = testableView.show('@disabled category:"themes"').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @disabled query with quoted category');
-			assert.equal(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @disabled query with quoted category.');
+		await testableView.show('@disabled category:"themes"').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @disabled query with quoted category');
+			assert.strictEqual(result.get(0).name, localDisabledTheme.manifest.name, 'Unexpected extension for @disabled query with quoted category.');
 		});
 
-		const disabledCategoryWithSpaceCheck = testableView.show('@disabled category:"programming languages"').then(result => {
-			assert.equal(result.length, 1, 'Unexpected number of results for @disabled query with quoted category inlcuding space');
-			assert.equal(result.get(0).name, localDisabledLanguage.manifest.name, 'Unexpected extension for @disabled query with quoted category including space.');
+		await testableView.show('@disabled category:"programming languages"').then(result => {
+			assert.strictEqual(result.length, 1, 'Unexpected number of results for @disabled query with quoted category inlcuding space');
+			assert.strictEqual(result.get(0).name, localDisabledLanguage.manifest.name, 'Unexpected extension for @disabled query with quoted category including space.');
 		});
-
-		return Promise.resolve([
-			installedCategoryWithoutQuotesCheck,
-			installedCategoryWithQuotesCheck,
-			installedCategoryWithSpaceCheck,
-			installedMultipleCategoryCheck,
-			enabledCategoryWithoutQuotesCheck,
-			enabledCategoryWithQuotesCheck,
-			enabledCategoryWithSpaceCheck,
-			disabledCategoryWithoutQuotesCheck,
-			disabledCategoryWithQuotesCheck,
-			disabledCategoryWithSpaceCheck
-		]);
 	});
 
 	test('Test @recommended:workspace query', () => {
 		const workspaceRecommendedExtensions = [
 			workspaceRecommendationA,
-			workspaceRecommendationB
+			workspaceRecommendationB,
+			configBasedRecommendationA,
 		];
 		const target = <SinonStub>instantiationService.stubPromise(IExtensionGalleryService, 'query', aPage(...workspaceRecommendedExtensions));
 
 		return testableView.show('@recommended:workspace').then(result => {
 			assert.ok(target.calledOnce);
 			const options: IQueryOptions = target.args[0][0];
-			assert.equal(options.names!.length, workspaceRecommendedExtensions.length);
-			assert.equal(result.length, workspaceRecommendedExtensions.length);
+			assert.strictEqual(options.names!.length, workspaceRecommendedExtensions.length);
+			assert.strictEqual(result.length, workspaceRecommendedExtensions.length);
 			for (let i = 0; i < workspaceRecommendedExtensions.length; i++) {
-				assert.equal(options.names![i], workspaceRecommendedExtensions[i].identifier.id);
-				assert.equal(result.get(i).identifier.id, workspaceRecommendedExtensions[i].identifier.id);
+				assert.strictEqual(options.names![i], workspaceRecommendedExtensions[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, workspaceRecommendedExtensions[i].identifier.id);
 			}
 		});
 	});
@@ -337,6 +364,7 @@ suite('ExtensionsListView Tests', () => {
 		const allRecommendedExtensions = [
 			fileBasedRecommendationA,
 			fileBasedRecommendationB,
+			configBasedRecommendationB,
 			otherRecommendationA
 		];
 		const target = <SinonStub>instantiationService.stubPromise(IExtensionGalleryService, 'query', aPage(...allRecommendedExtensions));
@@ -345,11 +373,11 @@ suite('ExtensionsListView Tests', () => {
 			const options: IQueryOptions = target.args[0][0];
 
 			assert.ok(target.calledOnce);
-			assert.equal(options.names!.length, allRecommendedExtensions.length);
-			assert.equal(result.length, allRecommendedExtensions.length);
+			assert.strictEqual(options.names!.length, allRecommendedExtensions.length);
+			assert.strictEqual(result.length, allRecommendedExtensions.length);
 			for (let i = 0; i < allRecommendedExtensions.length; i++) {
-				assert.equal(options.names![i], allRecommendedExtensions[i].identifier.id);
-				assert.equal(result.get(i).identifier.id, allRecommendedExtensions[i].identifier.id);
+				assert.strictEqual(options.names![i], allRecommendedExtensions[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, allRecommendedExtensions[i].identifier.id);
 			}
 		});
 	});
@@ -359,9 +387,11 @@ suite('ExtensionsListView Tests', () => {
 		const allRecommendedExtensions = [
 			workspaceRecommendationA,
 			workspaceRecommendationB,
+			configBasedRecommendationA,
 			fileBasedRecommendationA,
 			fileBasedRecommendationB,
-			otherRecommendationA
+			configBasedRecommendationB,
+			otherRecommendationA,
 		];
 		const target = <SinonStub>instantiationService.stubPromise(IExtensionGalleryService, 'query', aPage(...allRecommendedExtensions));
 
@@ -369,11 +399,11 @@ suite('ExtensionsListView Tests', () => {
 			const options: IQueryOptions = target.args[0][0];
 
 			assert.ok(target.calledOnce);
-			assert.equal(options.names!.length, allRecommendedExtensions.length);
-			assert.equal(result.length, allRecommendedExtensions.length);
+			assert.strictEqual(options.names!.length, allRecommendedExtensions.length);
+			assert.strictEqual(result.length, allRecommendedExtensions.length);
 			for (let i = 0; i < allRecommendedExtensions.length; i++) {
-				assert.equal(options.names![i], allRecommendedExtensions[i].identifier.id);
-				assert.equal(result.get(i).identifier.id, allRecommendedExtensions[i].identifier.id);
+				assert.strictEqual(options.names![i], allRecommendedExtensions[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, allRecommendedExtensions[i].identifier.id);
 			}
 		});
 	});
@@ -392,13 +422,13 @@ suite('ExtensionsListView Tests', () => {
 
 			assert.ok(experimentTarget.calledOnce);
 			assert.ok(queryTarget.calledOnce);
-			assert.equal(options.names!.length, curatedList.length);
-			assert.equal(result.length, curatedList.length);
+			assert.strictEqual(options.names!.length, curatedList.length);
+			assert.strictEqual(result.length, curatedList.length);
 			for (let i = 0; i < curatedList.length; i++) {
-				assert.equal(options.names![i], curatedList[i].identifier.id);
-				assert.equal(result.get(i).identifier.id, curatedList[i].identifier.id);
+				assert.strictEqual(options.names![i], curatedList[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, curatedList[i].identifier.id);
 			}
-			assert.equal(curatedKey, 'mykey');
+			assert.strictEqual(curatedKey, 'mykey');
 		});
 	});
 
@@ -415,10 +445,10 @@ suite('ExtensionsListView Tests', () => {
 			const options: IQueryOptions = queryTarget.args[0][0];
 
 			assert.ok(queryTarget.calledOnce);
-			assert.equal(options.text, searchText);
-			assert.equal(result.length, results.length);
+			assert.strictEqual(options.text, searchText);
+			assert.strictEqual(result.length, results.length);
 			for (let i = 0; i < results.length; i++) {
-				assert.equal(result.get(i).identifier.id, results[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, results[i].identifier.id);
 			}
 		});
 	});
@@ -457,17 +487,17 @@ suite('ExtensionsListView Tests', () => {
 		}]);
 
 		testableView.dispose();
-		testableView = instantiationService.createInstance(ExtensionsListView, {});
+		testableView = instantiationService.createInstance(ExtensionsListView, {}, {});
 
 		return testableView.show('search-me').then(result => {
 			const options: IQueryOptions = queryTarget.args[0][0];
 
 			assert.ok(experimentTarget.calledOnce);
 			assert.ok(queryTarget.calledOnce);
-			assert.equal(options.text, searchText);
-			assert.equal(result.length, expected.length);
+			assert.strictEqual(options.text, searchText);
+			assert.strictEqual(result.length, expected.length);
 			for (let i = 0; i < expected.length; i++) {
-				assert.equal(result.get(i).identifier.id, expected[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, expected[i].identifier.id);
 			}
 		});
 	});
@@ -484,36 +514,37 @@ suite('ExtensionsListView Tests', () => {
 		const queryTarget = <SinonStub>instantiationService.stubPromise(IExtensionGalleryService, 'query', aPage(...realResults));
 
 		testableView.dispose();
-		testableView = instantiationService.createInstance(ExtensionsListView, {});
+		testableView = instantiationService.createInstance(ExtensionsListView, {}, {});
 
 		return testableView.show('search-me @sort:installs').then(result => {
 			const options: IQueryOptions = queryTarget.args[0][0];
 
 			assert.ok(queryTarget.calledOnce);
-			assert.equal(options.text, searchText);
-			assert.equal(result.length, realResults.length);
+			assert.strictEqual(options.text, searchText);
+			assert.strictEqual(result.length, realResults.length);
 			for (let i = 0; i < realResults.length; i++) {
-				assert.equal(result.get(i).identifier.id, realResults[i].identifier.id);
+				assert.strictEqual(result.get(i).identifier.id, realResults[i].identifier.id);
 			}
 		});
 	});
 
 	function aLocalExtension(name: string = 'someext', manifest: any = {}, properties: any = {}): ILocalExtension {
-		manifest = assign({ name, publisher: 'pub', version: '1.0.0' }, manifest);
-		properties = assign({
+		manifest = { name, publisher: 'pub', version: '1.0.0', ...manifest };
+		properties = {
 			type: ExtensionType.User,
 			location: URI.file(`pub.${name}`),
-			identifier: { id: getGalleryExtensionId(manifest.publisher, manifest.name), uuid: undefined },
-			metadata: { id: getGalleryExtensionId(manifest.publisher, manifest.name), publisherId: manifest.publisher, publisherDisplayName: 'somename' }
-		}, properties);
+			identifier: { id: getGalleryExtensionId(manifest.publisher, manifest.name) },
+			metadata: { id: getGalleryExtensionId(manifest.publisher, manifest.name), publisherId: manifest.publisher, publisherDisplayName: 'somename' },
+			...properties
+		};
+		properties.isBuiltin = properties.type === ExtensionType.System;
 		return <ILocalExtension>Object.create({ manifest, ...properties });
 	}
 
 	function aGalleryExtension(name: string, properties: any = {}, galleryExtensionProperties: any = {}, assets: any = {}): IGalleryExtension {
-		const galleryExtension = <IGalleryExtension>Object.create({});
-		assign(galleryExtension, { name, publisher: 'pub', version: '1.0.0', properties: {}, assets: {} }, properties);
-		assign(galleryExtension.properties, { dependencies: [] }, galleryExtensionProperties);
-		assign(galleryExtension.assets, assets);
+		const galleryExtension = <IGalleryExtension>Object.create({ name, publisher: 'pub', version: '1.0.0', properties: {}, assets: {}, ...properties });
+		galleryExtension.properties = { ...galleryExtension.properties, dependencies: [], ...galleryExtensionProperties };
+		galleryExtension.assets = { ...galleryExtension.assets, ...assets };
 		galleryExtension.identifier = { id: getGalleryExtensionId(galleryExtension.publisher, galleryExtension.name), uuid: generateUuid() };
 		return <IGalleryExtension>galleryExtension;
 	}
@@ -521,5 +552,6 @@ suite('ExtensionsListView Tests', () => {
 	function aPage<T>(...objects: T[]): IPager<T> {
 		return { firstPage: objects, total: objects.length, pageSize: objects.length, getPage: () => null! };
 	}
+
 });
 

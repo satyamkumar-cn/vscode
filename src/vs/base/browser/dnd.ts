@@ -29,7 +29,7 @@ export class DelayedDragHandler extends Disposable {
 		}));
 
 		['dragleave', 'drop', 'dragend'].forEach(type => {
-			this._register(addDisposableListener(container, type as 'dragleave' | 'drop' | 'dragend', () => {
+			this._register(addDisposableListener(container, type, () => {
 				this.clearDragTimeout();
 			}));
 		});
@@ -42,7 +42,7 @@ export class DelayedDragHandler extends Disposable {
 		}
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		super.dispose();
 
 		this.clearDragTimeout();
@@ -68,7 +68,7 @@ export const DataTransfers = {
 	FILES: 'Files',
 
 	/**
-	 * Typicaly transfer type for copy/paste transfers.
+	 * Typically transfer type for copy/paste transfers.
 	 */
 	TEXT: 'text/plain'
 };
@@ -89,7 +89,7 @@ export function applyDragImage(event: DragEvent, label: string | null, clazz: st
 
 export interface IDragAndDropData {
 	update(dataTransfer: DataTransfer): void;
-	getData(): any;
+	getData(): unknown;
 }
 
 export class DragAndDropData<T> implements IDragAndDropData {

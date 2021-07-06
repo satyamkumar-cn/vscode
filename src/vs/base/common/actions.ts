@@ -3,66 +3,66 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IDisposable, combinedDisposable, Disposable } from 'vs/base/common/lifecycle';
+import * as nls from 'vs/nls';
+import { IDisposable, Disposable } from 'vs/base/common/lifecycle';
 import { Event, Emitter } from 'vs/base/common/event';
 
 export interface ITelemetryData {
-	from?: string;
-	target?: string;
-	[key: string]: any;
+	readonly from?: string;
+	readonly target?: string;
+	[key: string]: unknown;
 }
 
-export interface IAction extends IDisposable {
+export type WorkbenchActionExecutedClassification = {
+	id: { classification: 'SystemMetaData', purpose: 'FeatureInsight'; };
+	from: { classification: 'SystemMetaData', purpose: 'FeatureInsight'; };
+};
+
+export type WorkbenchActionExecutedEvent = {
 	id: string;
+	from: string;
+};
+
+export interface IAction extends IDisposable {
+	readonly id: string;
 	label: string;
 	tooltip: string;
 	class: string | undefined;
 	enabled: boolean;
 	checked: boolean;
-	radio: boolean;
-	run(event?: any): Promise<any>;
+	run(event?: unknown): Promise<unknown>;
 }
 
 export interface IActionRunner extends IDisposable {
-	run(action: IAction, context?: any): Promise<any>;
-	onDidRun: Event<IRunEvent>;
-	onDidBeforeRun: Event<IRunEvent>;
-}
+	readonly onDidRun: Event<IRunEvent>;
+	readonly onBeforeRun: Event<IRunEvent>;
 
-export interface IActionItem {
-	actionRunner: IActionRunner;
-	setActionContext(context: any): void;
-	render(element: any /* HTMLElement */): void;
-	isEnabled(): boolean;
-	focus(): void;
-	blur(): void;
-	dispose(): void;
+	run(action: IAction, context?: unknown): Promise<unknown>;
 }
 
 export interface IActionChangeEvent {
-	label?: string;
-	tooltip?: string;
-	class?: string;
-	enabled?: boolean;
-	checked?: boolean;
-	radio?: boolean;
+	readonly label?: string;
+	readonly tooltip?: string;
+	readonly class?: string;
+	readonly enabled?: boolean;
+	readonly checked?: boolean;
 }
 
-export class Action implements IAction {
+export class Action extends Disposable implements IAction {
 
-	protected _onDidChange = new Emitter<IActionChangeEvent>();
-	readonly onDidChange: Event<IActionChangeEvent> = this._onDidChange.event;
+	protected _onDidChange = this._register(new Emitter<IActionChangeEvent>());
+	readonly onDidChange = this._onDidChange.event;
 
-	protected _id: string;
+	protected readonly _id: string;
 	protected _label: string;
-	protected _tooltip: string;
+	protected _tooltip: string | undefined;
 	protected _cssClass: string | undefined;
-	protected _enabled: boolean;
-	protected _checked: boolean;
-	protected _radio: boolean;
-	protected _actionCallback?: (event?: any) => Promise<any>;
+	protected _enabled: boolean = true;
+	protected _checked: boolean = false;
+	protected readonly _actionCallback?: (event?: unknown) => Promise<unknown>;
 
-	constructor(id: string, label: string = '', cssClass: string = '', enabled: boolean = true, actionCallback?: (event?: any) => Promise<any>) {
+	constructor(id: string, label: string = '', cssClass: string = '', enabled: boolean = true, actionCallback?: (event?: unknown) => Promise<unknown>) {
+		super();
 		this._id = id;
 		this._label = label;
 		this._cssClass = cssClass;
@@ -82,7 +82,7 @@ export class Action implements IAction {
 		this._setLabel(value);
 	}
 
-	protected _setLabel(value: string): void {
+	private _setLabel(value: string): void {
 		if (this._label !== value) {
 			this._label = value;
 			this._onDidChange.fire({ label: value });
@@ -90,7 +90,7 @@ export class Action implements IAction {
 	}
 
 	get tooltip(): string {
-		return this._tooltip;
+		return this._tooltip || '';
 	}
 
 	set tooltip(value: string) {
@@ -142,14 +142,6 @@ export class Action implements IAction {
 		this._setChecked(value);
 	}
 
-	get radio(): boolean {
-		return this._radio;
-	}
-
-	set radio(value: boolean) {
-		this._setRadio(value);
-	}
-
 	protected _setChecked(value: boolean): void {
 		if (this._checked !== value) {
 			this._checked = value;
@@ -157,75 +149,106 @@ export class Action implements IAction {
 		}
 	}
 
-	protected _setRadio(value: boolean): void {
-		if (this._radio !== value) {
-			this._radio = value;
-			this._onDidChange.fire({ radio: value });
-		}
-	}
-
-	run(event?: any, _data?: ITelemetryData): Promise<any> {
+	async run(event?: unknown, data?: ITelemetryData): Promise<void> {
 		if (this._actionCallback) {
-			return this._actionCallback(event);
+			await this._actionCallback(event);
 		}
-
-		return Promise.resolve(true);
-	}
-
-	dispose() {
-		this._onDidChange.dispose();
 	}
 }
 
 export interface IRunEvent {
-	action: IAction;
-	result?: any;
-	error?: any;
+	readonly action: IAction;
+	readonly error?: Error;
 }
 
 export class ActionRunner extends Disposable implements IActionRunner {
 
-	private _onDidBeforeRun = this._register(new Emitter<IRunEvent>());
-	readonly onDidBeforeRun: Event<IRunEvent> = this._onDidBeforeRun.event;
+	private _onBeforeRun = this._register(new Emitter<IRunEvent>());
+	readonly onBeforeRun = this._onBeforeRun.event;
 
 	private _onDidRun = this._register(new Emitter<IRunEvent>());
-	readonly onDidRun: Event<IRunEvent> = this._onDidRun.event;
+	readonly onDidRun = this._onDidRun.event;
 
-	run(action: IAction, context?: any): Promise<any> {
+	async run(action: IAction, context?: unknown): Promise<void> {
 		if (!action.enabled) {
-			return Promise.resolve(null);
+			return;
 		}
 
-		this._onDidBeforeRun.fire({ action: action });
+		this._onBeforeRun.fire({ action });
 
-		return this.runAction(action, context).then((result: any) => {
-			this._onDidRun.fire({ action: action, result: result });
-		}, (error: any) => {
-			this._onDidRun.fire({ action: action, error: error });
-		});
+		let error: Error | undefined = undefined;
+		try {
+			await this.runAction(action, context);
+		} catch (e) {
+			error = e;
+		}
+
+		this._onDidRun.fire({ action, error });
 	}
 
-	protected runAction(action: IAction, context?: any): Promise<any> {
-		const res = context ? action.run(context) : action.run();
-		return Promise.resolve(res);
+	protected async runAction(action: IAction, context?: unknown): Promise<void> {
+		await action.run(context);
 	}
 }
 
-export class RadioGroup extends Disposable {
+export class Separator extends Action {
 
-	constructor(readonly actions: Action[]) {
-		super();
+	static readonly ID = 'vs.actions.separator';
 
-		this._register(combinedDisposable(actions.map(action => {
-			return action.onDidChange(e => {
-				if (e.checked && action.checked) {
-					for (const candidate of actions) {
-						if (candidate !== action) {
-							candidate.checked = false;
-						}
-					}
-				}
-			});
-		})));
+	constructor(label?: string) {
+		super(Separator.ID, label, label ? 'separator text' : 'separator');
+
+		this.checked = false;
+		this.enabled = false;
 	}
+}
+
+export class SubmenuAction implements IAction {
+
+	readonly id: string;
+	readonly label: string;
+	readonly class: string | undefined;
+	readonly tooltip: string = '';
+	readonly enabled: boolean = true;
+	readonly checked: boolean = false;
+
+	private readonly _actions: readonly IAction[];
+	get actions(): readonly IAction[] { return this._actions; }
+
+	constructor(id: string, label: string, actions: readonly IAction[], cssClass?: string) {
+		this.id = id;
+		this.label = label;
+		this.class = cssClass;
+		this._actions = actions;
+	}
+
+	dispose(): void {
+		// there is NOTHING to dispose and the SubmenuAction should
+		// never have anything to dispose as it is a convenience type
+		// to bridge into the rendering world.
+	}
+
+	async run(): Promise<void> { }
+}
+
+export class EmptySubmenuAction extends Action {
+
+	static readonly ID = 'vs.actions.empty';
+
+	constructor() {
+		super(EmptySubmenuAction.ID, nls.localize('submenu.empty', '(empty)'), undefined, false);
+	}
+}
+
+export function toAction(props: { id: string, label: string, enabled?: boolean, checked?: boolean, run: Function; }): IAction {
+	return {
+		id: props.id,
+		label: props.label,
+		class: undefined,
+		enabled: props.enabled ?? true,
+		checked: props.checked ?? false,
+		run: async () => props.run(),
+		tooltip: props.label,
+		dispose: () => { }
+	};
 }

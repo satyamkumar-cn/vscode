@@ -6,14 +6,14 @@
 import * as nls from 'vs/nls';
 import { Action } from 'vs/base/common/actions';
 import { MenuId, MenuRegistry, SyncActionDescriptor } from 'vs/platform/actions/common/actions';
-import { ConfigurationTarget, IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
 import { Registry } from 'vs/platform/registry/common/platform';
-import { Extensions as ActionExtensions, IWorkbenchActionRegistry } from 'vs/workbench/common/actions';
+import { CATEGORIES, Extensions as ActionExtensions, IWorkbenchActionRegistry } from 'vs/workbench/common/actions';
 
 export class ToggleMinimapAction extends Action {
 	public static readonly ID = 'editor.action.toggleMinimap';
-	public static readonly LABEL = nls.localize('toggleMinimap', "View: Toggle Minimap");
+	public static readonly LABEL = nls.localize('toggleMinimap', "Toggle Minimap");
 
 	constructor(
 		id: string,
@@ -23,20 +23,20 @@ export class ToggleMinimapAction extends Action {
 		super(id, label);
 	}
 
-	public run(): Promise<any> {
+	public override run(): Promise<any> {
 		const newValue = !this._configurationService.getValue<boolean>('editor.minimap.enabled');
-		return this._configurationService.updateValue('editor.minimap.enabled', newValue, ConfigurationTarget.USER);
+		return this._configurationService.updateValue('editor.minimap.enabled', newValue);
 	}
 }
 
 const registry = Registry.as<IWorkbenchActionRegistry>(ActionExtensions.WorkbenchActions);
-registry.registerWorkbenchAction(new SyncActionDescriptor(ToggleMinimapAction, ToggleMinimapAction.ID, ToggleMinimapAction.LABEL), 'View: Toggle Minimap');
+registry.registerWorkbenchAction(SyncActionDescriptor.from(ToggleMinimapAction), 'View: Toggle Minimap', CATEGORIES.View.value);
 
 MenuRegistry.appendMenuItem(MenuId.MenubarViewMenu, {
 	group: '5_editor',
 	command: {
 		id: ToggleMinimapAction.ID,
-		title: nls.localize({ key: 'miToggleMinimap', comment: ['&& denotes a mnemonic'] }, "Toggle &&Minimap"),
+		title: nls.localize({ key: 'miShowMinimap', comment: ['&& denotes a mnemonic'] }, "Show &&Minimap"),
 		toggled: ContextKeyExpr.equals('config.editor.minimap.enabled', true)
 	},
 	order: 2

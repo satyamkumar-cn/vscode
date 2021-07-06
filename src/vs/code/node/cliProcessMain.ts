@@ -3,311 +3,235 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { localize } from 'vs/nls';
-import product from 'vs/platform/product/node/product';
-import pkg from 'vs/platform/product/node/package';
-import * as path from 'vs/base/common/path';
-import * as semver from 'semver';
-
-import { sequence } from 'vs/base/common/async';
+import { release, hostname } from 'os';
+import * as fs from 'fs';
+import { gracefulify } from 'graceful-fs';
+import { isAbsolute, join } from 'vs/base/common/path';
+import { raceTimeout } from 'vs/base/common/async';
+import product from 'vs/platform/product/common/product';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
 import { SyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { InstantiationService } from 'vs/platform/instantiation/common/instantiationService';
-import { IEnvironmentService, ParsedArgs } from 'vs/platform/environment/common/environment';
-import { EnvironmentService } from 'vs/platform/environment/node/environmentService';
-import { IExtensionManagementService, IExtensionGalleryService, IGalleryExtension } from 'vs/platform/extensionManagement/common/extensionManagement';
+import { INativeEnvironmentService } from 'vs/platform/environment/common/environment';
+import { NativeParsedArgs } from 'vs/platform/environment/common/argv';
+import { NativeEnvironmentService } from 'vs/platform/environment/node/environmentService';
+import { IExtensionManagementService, IExtensionGalleryService, IExtensionManagementCLIService } from 'vs/platform/extensionManagement/common/extensionManagement';
 import { ExtensionManagementService } from 'vs/platform/extensionManagement/node/extensionManagementService';
-import { ExtensionGalleryService } from 'vs/platform/extensionManagement/node/extensionGalleryService';
+import { ExtensionGalleryService } from 'vs/platform/extensionManagement/common/extensionGalleryService';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { combinedAppender, NullTelemetryService } from 'vs/platform/telemetry/common/telemetryUtils';
 import { TelemetryService, ITelemetryServiceConfig } from 'vs/platform/telemetry/common/telemetryService';
-import { resolveCommonProperties } from 'vs/platform/telemetry/node/commonProperties';
-import { IRequestService } from 'vs/platform/request/node/request';
+import { resolveCommonProperties } from 'vs/platform/telemetry/common/commonProperties';
+import { IRequestService } from 'vs/platform/request/common/request';
 import { RequestService } from 'vs/platform/request/node/requestService';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
-import { ConfigurationService } from 'vs/platform/configuration/node/configurationService';
+import { ConfigurationService } from 'vs/platform/configuration/common/configurationService';
 import { AppInsightsAppender } from 'vs/platform/telemetry/node/appInsightsAppender';
-import { mkdirp, writeFile } from 'vs/base/node/pfs';
-import { getBaseLabel } from 'vs/base/common/labels';
-import { IStateService } from 'vs/platform/state/common/state';
+import { IStateService } from 'vs/platform/state/node/state';
 import { StateService } from 'vs/platform/state/node/stateService';
-import { createSpdLogService } from 'vs/platform/log/node/spdlogService';
-import { ILogService, getLogLevel } from 'vs/platform/log/common/log';
-import { isPromiseCanceledError } from 'vs/base/common/errors';
-import { areSameExtensions, adoptToGalleryExtensionId, getGalleryExtensionId } from 'vs/platform/extensionManagement/common/extensionManagementUtil';
+import { ILogService, getLogLevel, LogLevel, ConsoleLogger, MultiplexLogService, ILogger } from 'vs/platform/log/common/log';
+import { Schemas } from 'vs/base/common/network';
+import { SpdLogLogger } from 'vs/platform/log/node/spdlogLog';
+import { buildTelemetryMessage } from 'vs/platform/telemetry/node/telemetry';
+import { FileService } from 'vs/platform/files/common/fileService';
+import { IFileService } from 'vs/platform/files/common/files';
+import { DiskFileSystemProvider } from 'vs/platform/files/node/diskFileSystemProvider';
+import { Disposable } from 'vs/base/common/lifecycle';
+import { IProductService } from 'vs/platform/product/common/productService';
+import { ExtensionManagementCLIService } from 'vs/platform/extensionManagement/common/extensionManagementCLIService';
 import { URI } from 'vs/base/common/uri';
-import { getManifest } from 'vs/platform/extensionManagement/node/extensionManagementUtil';
-import { IExtensionManifest, ExtensionType } from 'vs/platform/extensions/common/extensions';
-import { isUIExtension } from 'vs/platform/extensions/node/extensionsUtil';
-import { CancellationToken } from 'vs/base/common/cancellation';
+import { LocalizationsService } from 'vs/platform/localizations/node/localizations';
+import { ILocalizationsService } from 'vs/platform/localizations/common/localizations';
+import { setUnexpectedErrorHandler } from 'vs/base/common/errors';
+import { toErrorMessage } from 'vs/base/common/errorMessage';
+import { VSBuffer } from 'vs/base/common/buffer';
+import { cwd } from 'vs/base/common/process';
 
-const notFound = (id: string) => localize('notFound', "Extension '{0}' not found.", id);
-const notInstalled = (id: string) => localize('notInstalled', "Extension '{0}' is not installed.", id);
-const useId = localize('useId', "Make sure you use the full extension ID, including the publisher, eg: {0}", 'ms-vscode.csharp');
-
-function getId(manifest: IExtensionManifest, withVersion?: boolean): string {
-	if (withVersion) {
-		return `${manifest.publisher}.${manifest.name}@${manifest.version}`;
-	} else {
-		return `${manifest.publisher}.${manifest.name}`;
-	}
-}
-
-const EXTENSION_ID_REGEX = /^([^.]+\..+)@(\d+\.\d+\.\d+(-.*)?)$/;
-
-export function getIdAndVersion(id: string): [string, string | undefined] {
-	const matches = EXTENSION_ID_REGEX.exec(id);
-	if (matches && matches[1]) {
-		return [adoptToGalleryExtensionId(matches[1]), matches[2]];
-	}
-	return [adoptToGalleryExtensionId(id), undefined];
-}
-
-
-export class Main {
+class CliMain extends Disposable {
 
 	constructor(
-		private readonly remote: boolean,
-		@IEnvironmentService private readonly environmentService: IEnvironmentService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
-		@IExtensionManagementService private readonly extensionManagementService: IExtensionManagementService,
-		@IExtensionGalleryService private readonly extensionGalleryService: IExtensionGalleryService
-	) { }
+		private argv: NativeParsedArgs
+	) {
+		super();
 
-	async run(argv: ParsedArgs): Promise<any> {
-		if (argv['install-source']) {
-			await this.setInstallSource(argv['install-source']);
+		// Enable gracefulFs
+		gracefulify(fs);
 
-		} else if (argv['list-extensions']) {
-			await this.listExtensions(!!argv['show-versions']);
-
-		} else if (argv['install-extension']) {
-			const arg = argv['install-extension'];
-			const args: string[] = typeof arg === 'string' ? [arg] : arg;
-			await this.installExtensions(args, argv['force']);
-
-		} else if (argv['uninstall-extension']) {
-			const arg = argv['uninstall-extension'];
-			const ids: string[] = typeof arg === 'string' ? [arg] : arg;
-			await this.uninstallExtension(ids);
-		}
+		this.registerListeners();
 	}
 
-	private setInstallSource(installSource: string): Promise<any> {
-		return writeFile(this.environmentService.installSourcePath, installSource.slice(0, 30));
+	private registerListeners(): void {
+
+		// Dispose on exit
+		process.once('exit', () => this.dispose());
 	}
 
-	private async listExtensions(showVersions: boolean): Promise<any> {
-		const extensions = await this.extensionManagementService.getInstalled(ExtensionType.User);
-		extensions.forEach(e => console.log(getId(e.manifest, showVersions)));
+	async run(): Promise<void> {
+
+		// Services
+		const [instantiationService, appenders] = await this.initServices();
+
+		return instantiationService.invokeFunction(async accessor => {
+			const logService = accessor.get(ILogService);
+			const fileService = accessor.get(IFileService);
+			const environmentService = accessor.get(INativeEnvironmentService);
+			const extensionManagementCLIService = accessor.get(IExtensionManagementCLIService);
+
+			// Log info
+			logService.info('CLI main', this.argv);
+
+			// Error handler
+			this.registerErrorHandler(logService);
+
+			// Run based on argv
+			await this.doRun(environmentService, extensionManagementCLIService, fileService);
+
+			// Flush the remaining data in AI adapter (with 1s timeout)
+			return raceTimeout(combinedAppender(...appenders).flush(), 1000);
+		});
 	}
 
-	private async installExtensions(extensions: string[], force: boolean): Promise<void> {
-		let failed: string[] = [];
-		for (const extension of extensions) {
-			try {
-				await this.installExtension(extension, force);
-			} catch (err) {
-				console.error(err.message || err.stack || err);
-				failed.push(extension);
-			}
-		}
-		return failed.length ? Promise.reject(localize('installation failed', "Failed Installing Extensions: {0}", failed.join(', '))) : Promise.resolve();
-	}
+	private async initServices(): Promise<[IInstantiationService, AppInsightsAppender[]]> {
+		const services = new ServiceCollection();
 
-	private async installExtension(extension: string, force: boolean): Promise<any> {
-		if (/\.vsix$/i.test(extension)) {
-			extension = path.isAbsolute(extension) ? extension : path.join(process.cwd(), extension);
+		// Product
+		const productService = { _serviceBrand: undefined, ...product };
+		services.set(IProductService, productService);
 
-			const manifest = await getManifest(extension);
-			if (this.remote && isUIExtension(manifest, this.configurationService)) {
-				console.log(localize('notSupportedUIExtension', "Can't install extension {0} since UI Extensions are not supported", getBaseLabel(extension)));
-				return null;
-			}
-			const valid = await this.validate(manifest, force);
+		// Environment
+		const environmentService = new NativeEnvironmentService(this.argv, productService);
+		services.set(INativeEnvironmentService, environmentService);
 
-			if (valid) {
-				return this.extensionManagementService.install(URI.file(extension)).then(() => {
-					console.log(localize('successVsixInstall', "Extension '{0}' was successfully installed!", getBaseLabel(extension)));
-				}, error => {
-					if (isPromiseCanceledError(error)) {
-						console.log(localize('cancelVsixInstall', "Cancelled installing Extension '{0}'.", getBaseLabel(extension)));
-						return null;
-					} else {
-						return Promise.reject(error);
-					}
-				});
-			}
-			return null;
+		// Init folders
+		await Promise.all([environmentService.appSettingsHome.fsPath, environmentService.extensionsPath].map(path => path ? fs.promises.mkdir(path, { recursive: true }) : undefined));
+
+		// Log
+		const logLevel = getLogLevel(environmentService);
+		const loggers: ILogger[] = [];
+		loggers.push(new SpdLogLogger('cli', join(environmentService.logsPath, 'cli.log'), true, logLevel));
+		if (logLevel === LogLevel.Trace) {
+			loggers.push(new ConsoleLogger(logLevel));
 		}
 
-		const [id, version] = getIdAndVersion(extension);
-		return this.extensionManagementService.getInstalled(ExtensionType.User)
-			.then(installed => this.extensionGalleryService.getCompatibleExtension({ id }, version)
-				.then<IGalleryExtension>(null, err => {
-					if (err.responseText) {
-						try {
-							const response = JSON.parse(err.responseText);
-							return Promise.reject(response.message);
-						} catch (e) {
-							// noop
-						}
-					}
-					return Promise.reject(err);
-				})
-				.then(async extension => {
-					if (!extension) {
-						return Promise.reject(new Error(`${notFound(version ? `${id}@${version}` : id)}\n${useId}`));
-					}
+		const logService = this._register(new MultiplexLogService(loggers));
+		services.set(ILogService, logService);
 
-					const manifest = await this.extensionGalleryService.getManifest(extension, CancellationToken.None);
-					if (this.remote && manifest && isUIExtension(manifest, this.configurationService)) {
-						console.log(localize('notSupportedUIExtension', "Can't install extension {0} since UI Extensions are not supported", extension.identifier.id));
-						return null;
-					}
+		// Files
+		const fileService = this._register(new FileService(logService));
+		services.set(IFileService, fileService);
 
-					const [installedExtension] = installed.filter(e => areSameExtensions(e.identifier, { id }));
-					if (installedExtension) {
-						if (extension.version !== installedExtension.manifest.version) {
-							if (version || force) {
-								console.log(localize('updateMessage', "Updating the Extension '{0}' to the version {1}", id, extension.version));
-								return this.installFromGallery(id, extension);
-							} else {
-								console.log(localize('forceUpdate', "Extension '{0}' v{1} is already installed, but a newer version {2} is available in the marketplace. Use '--force' option to update to newer version.", id, installedExtension.manifest.version, extension.version));
-								return Promise.resolve(null);
-							}
-						} else {
-							console.log(localize('alreadyInstalled', "Extension '{0}' is already installed.", version ? `${id}@${version}` : id));
-							return Promise.resolve(null);
-						}
-					} else {
-						console.log(localize('foundExtension', "Found '{0}' in the marketplace.", id));
-						return this.installFromGallery(id, extension);
-					}
+		const diskFileSystemProvider = this._register(new DiskFileSystemProvider(logService));
+		fileService.registerProvider(Schemas.file, diskFileSystemProvider);
 
-				}));
-	}
+		// Configuration
+		const configurationService = this._register(new ConfigurationService(environmentService.settingsResource, fileService));
+		services.set(IConfigurationService, configurationService);
 
+		// Init config
+		await configurationService.initialize();
 
+		// State
+		const stateService = new StateService(environmentService, logService);
+		services.set(IStateService, stateService);
 
-	private async validate(manifest: IExtensionManifest, force: boolean): Promise<boolean> {
-		if (!manifest) {
-			throw new Error('Invalid vsix');
-		}
+		// Request
+		services.set(IRequestService, new SyncDescriptor(RequestService));
 
-		const extensionIdentifier = { id: getGalleryExtensionId(manifest.publisher, manifest.name) };
-		const installedExtensions = await this.extensionManagementService.getInstalled(ExtensionType.User);
-		const newer = installedExtensions.filter(local => areSameExtensions(extensionIdentifier, local.identifier) && semver.gt(local.manifest.version, manifest.version))[0];
+		// Extensions
+		services.set(IExtensionManagementService, new SyncDescriptor(ExtensionManagementService));
+		services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryService));
+		services.set(IExtensionManagementCLIService, new SyncDescriptor(ExtensionManagementCLIService));
 
-		if (newer && !force) {
-			console.log(localize('forceDowngrade', "A newer version of this extension '{0}' v{1} is already installed. Use '--force' option to downgrade to older version.", newer.identifier.id, newer.manifest.version, manifest.version));
-			return false;
-		}
+		// Localizations
+		services.set(ILocalizationsService, new SyncDescriptor(LocalizationsService));
 
-		return true;
-	}
-
-	private async installFromGallery(id: string, extension: IGalleryExtension): Promise<void> {
-		console.log(localize('installing', "Installing..."));
-
-		try {
-			await this.extensionManagementService.installFromGallery(extension);
-			console.log(localize('successInstall', "Extension '{0}' v{1} was successfully installed!", id, extension.version));
-		} catch (error) {
-			if (isPromiseCanceledError(error)) {
-				console.log(localize('cancelVsixInstall', "Cancelled installing Extension '{0}'.", id));
-			} else {
-				throw error;
-			}
-		}
-	}
-
-	private uninstallExtension(extensions: string[]): Promise<any> {
-		async function getExtensionId(extensionDescription: string): Promise<string> {
-			if (!/\.vsix$/i.test(extensionDescription)) {
-				return extensionDescription;
+		// Telemetry
+		const appenders: AppInsightsAppender[] = [];
+		if (environmentService.isBuilt && !environmentService.isExtensionDevelopment && !environmentService.disableTelemetry && productService.enableTelemetry) {
+			if (productService.aiConfig && productService.aiConfig.asimovKey) {
+				appenders.push(new AppInsightsAppender('monacoworkbench', null, productService.aiConfig.asimovKey));
 			}
 
-			const zipPath = path.isAbsolute(extensionDescription) ? extensionDescription : path.join(process.cwd(), extensionDescription);
-			const manifest = await getManifest(zipPath);
-			return getId(manifest);
+			const { appRoot, extensionsPath, installSourcePath } = environmentService;
+
+			const config: ITelemetryServiceConfig = {
+				appender: combinedAppender(...appenders),
+				sendErrorTelemetry: false,
+				commonProperties: resolveCommonProperties(fileService, release(), hostname(), process.arch, productService.commit, productService.version, stateService.getItem('telemetry.machineId'), productService.msftInternalDomains, installSourcePath),
+				piiPaths: [appRoot, extensionsPath]
+			};
+
+			services.set(ITelemetryService, new SyncDescriptor(TelemetryService, [config]));
+
+		} else {
+			services.set(ITelemetryService, NullTelemetryService);
 		}
 
-		return sequence(extensions.map(extension => () => {
-			return getExtensionId(extension).then(id => {
-				return this.extensionManagementService.getInstalled(ExtensionType.User).then(installed => {
-					const [extension] = installed.filter(e => areSameExtensions(e.identifier, { id }));
+		return [new InstantiationService(services), appenders];
+	}
 
-					if (!extension) {
-						return Promise.reject(new Error(`${notInstalled(id)}\n${useId}`));
-					}
+	private registerErrorHandler(logService: ILogService): void {
 
-					console.log(localize('uninstalling', "Uninstalling {0}...", id));
+		// Install handler for unexpected errors
+		setUnexpectedErrorHandler(error => {
+			const message = toErrorMessage(error, true);
+			if (!message) {
+				return;
+			}
 
-					return this.extensionManagementService.uninstall(extension, true)
-						.then(() => console.log(localize('successUninstall', "Extension '{0}' was successfully uninstalled!", id)));
-				});
-			});
-		}));
+			logService.error(`[uncaught exception in CLI]: ${message}`);
+		});
+	}
+
+	private async doRun(environmentService: INativeEnvironmentService, extensionManagementCLIService: IExtensionManagementCLIService, fileService: IFileService): Promise<void> {
+
+		// Install Source
+		if (this.argv['install-source']) {
+			return this.setInstallSource(environmentService, fileService, this.argv['install-source']);
+		}
+
+		// List Extensions
+		if (this.argv['list-extensions']) {
+			return extensionManagementCLIService.listExtensions(!!this.argv['show-versions'], this.argv['category']);
+		}
+
+		// Install Extension
+		else if (this.argv['install-extension'] || this.argv['install-builtin-extension']) {
+			return extensionManagementCLIService.installExtensions(this.asExtensionIdOrVSIX(this.argv['install-extension'] || []), this.argv['install-builtin-extension'] || [], !!this.argv['do-not-sync'], !!this.argv['force']);
+		}
+
+		// Uninstall Extension
+		else if (this.argv['uninstall-extension']) {
+			return extensionManagementCLIService.uninstallExtensions(this.asExtensionIdOrVSIX(this.argv['uninstall-extension']), !!this.argv['force']);
+		}
+
+		// Locate Extension
+		else if (this.argv['locate-extension']) {
+			return extensionManagementCLIService.locateExtension(this.argv['locate-extension']);
+		}
+
+		// Telemetry
+		else if (this.argv['telemetry']) {
+			console.log(buildTelemetryMessage(environmentService.appRoot, environmentService.extensionsPath));
+		}
+	}
+
+	private asExtensionIdOrVSIX(inputs: string[]): (string | URI)[] {
+		return inputs.map(input => /\.vsix$/i.test(input) ? URI.file(isAbsolute(input) ? input : join(cwd(), input)) : input);
+	}
+
+	private async setInstallSource(environmentService: INativeEnvironmentService, fileService: IFileService, installSource: string): Promise<void> {
+		await fileService.writeFile(URI.file(environmentService.installSourcePath), VSBuffer.fromString(installSource.slice(0, 30)));
 	}
 }
 
-const eventPrefix = 'monacoworkbench';
+export async function main(argv: NativeParsedArgs): Promise<void> {
+	const cliMain = new CliMain(argv);
 
-export function main(argv: ParsedArgs): Promise<void> {
-	const services = new ServiceCollection();
-
-	const environmentService = new EnvironmentService(argv, process.execPath);
-	const logService = createSpdLogService('cli', getLogLevel(environmentService), environmentService.logsPath);
-	process.once('exit', () => logService.dispose());
-
-	logService.info('main', argv);
-
-	services.set(IEnvironmentService, environmentService);
-	services.set(ILogService, logService);
-	services.set(IStateService, new SyncDescriptor(StateService));
-
-	const instantiationService: IInstantiationService = new InstantiationService(services);
-
-	return instantiationService.invokeFunction(accessor => {
-		const envService = accessor.get(IEnvironmentService);
-		const stateService = accessor.get(IStateService);
-
-		return Promise.all([envService.appSettingsHome, envService.extensionsPath].map(p => mkdirp(p))).then(() => {
-			const { appRoot, extensionsPath, extensionDevelopmentLocationURI, isBuilt, installSourcePath } = envService;
-
-			const services = new ServiceCollection();
-			services.set(IConfigurationService, new SyncDescriptor(ConfigurationService));
-			services.set(IRequestService, new SyncDescriptor(RequestService));
-			services.set(IExtensionManagementService, new SyncDescriptor(ExtensionManagementService, [false]));
-			services.set(IExtensionGalleryService, new SyncDescriptor(ExtensionGalleryService));
-
-			const appenders: AppInsightsAppender[] = [];
-			if (isBuilt && !extensionDevelopmentLocationURI && !envService.args['disable-telemetry'] && product.enableTelemetry) {
-
-				if (product.aiConfig && product.aiConfig.asimovKey) {
-					appenders.push(new AppInsightsAppender(eventPrefix, null, product.aiConfig.asimovKey, logService));
-				}
-
-				const config: ITelemetryServiceConfig = {
-					appender: combinedAppender(...appenders),
-					commonProperties: resolveCommonProperties(product.commit, pkg.version, stateService.getItem('telemetry.machineId'), installSourcePath),
-					piiPaths: [appRoot, extensionsPath]
-				};
-
-				services.set(ITelemetryService, new SyncDescriptor(TelemetryService, [config]));
-			} else {
-				services.set(ITelemetryService, NullTelemetryService);
-			}
-
-			const instantiationService2 = instantiationService.createChild(services);
-			const main = instantiationService2.createInstance(Main, false);
-
-			return main.run(argv).then(() => {
-				// Dispose the AI adapter so that remaining data gets flushed.
-				return combinedAppender(...appenders).dispose();
-			});
-		});
-	});
+	try {
+		await cliMain.run();
+	} finally {
+		cliMain.dispose();
+	}
 }

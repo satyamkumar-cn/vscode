@@ -10,8 +10,8 @@ import { ColorId, ITokenizationRegistry, ITokenizationSupport, ITokenizationSupp
 
 export class TokenizationRegistryImpl implements ITokenizationRegistry {
 
-	private _map: { [language: string]: ITokenizationSupport };
-	private _promises: { [language: string]: Thenable<void> };
+	private readonly _map = new Map<string, ITokenizationSupport>();
+	private readonly _promises = new Map<string, Thenable<void>>();
 
 	private readonly _onDidChange = new Emitter<ITokenizationSupportChangedEvent>();
 	public readonly onDidChange: Event<ITokenizationSupportChangedEvent> = this._onDidChange.event;
@@ -19,8 +19,6 @@ export class TokenizationRegistryImpl implements ITokenizationRegistry {
 	private _colorMap: Color[] | null;
 
 	constructor() {
-		this._map = Object.create(null);
-		this._promises = Object.create(null);
 		this._colorMap = null;
 	}
 
@@ -32,13 +30,13 @@ export class TokenizationRegistryImpl implements ITokenizationRegistry {
 	}
 
 	public register(language: string, support: ITokenizationSupport) {
-		this._map[language] = support;
+		this._map.set(language, support);
 		this.fire([language]);
 		return toDisposable(() => {
-			if (this._map[language] !== support) {
+			if (this._map.get(language) !== support) {
 				return;
 			}
-			delete this._map[language];
+			this._map.delete(language);
 			this.fire([language]);
 		});
 	}
@@ -48,13 +46,13 @@ export class TokenizationRegistryImpl implements ITokenizationRegistry {
 		let registration: IDisposable | null = null;
 		let isDisposed: boolean = false;
 
-		this._promises[language] = supportPromise.then(support => {
-			delete this._promises[language];
+		this._promises.set(language, supportPromise.then(support => {
+			this._promises.delete(language);
 			if (isDisposed || !support) {
 				return;
 			}
 			registration = this.register(language, support);
-		});
+		}));
 
 		return toDisposable(() => {
 			isDisposed = true;
@@ -69,21 +67,21 @@ export class TokenizationRegistryImpl implements ITokenizationRegistry {
 		if (support) {
 			return Promise.resolve(support);
 		}
-		const promise = this._promises[language];
+		const promise = this._promises.get(language);
 		if (promise) {
-			return promise.then(_ => this.get(language));
+			return promise.then(_ => this.get(language)!);
 		}
 		return null;
 	}
 
-	public get(language: string): ITokenizationSupport {
-		return (this._map[language] || null);
+	public get(language: string): ITokenizationSupport | null {
+		return (this._map.get(language) || null);
 	}
 
 	public setColorMap(colorMap: Color[]): void {
 		this._colorMap = colorMap;
 		this._onDidChange.fire({
-			changedLanguages: Object.keys(this._map),
+			changedLanguages: Array.from(this._map.keys()),
 			changedColorMap: true
 		});
 	}

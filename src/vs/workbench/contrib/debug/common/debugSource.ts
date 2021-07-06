@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as nls from 'vs/nls';
-import { URI as uri } from 'vs/base/common/uri';
+import { URI } from 'vs/base/common/uri';
 import { normalize, isAbsolute } from 'vs/base/common/path';
 import * as resources from 'vs/base/common/resources';
 import { DEBUG_SCHEME } from 'vs/workbench/contrib/debug/common/debug';
@@ -12,8 +12,11 @@ import { IRange } from 'vs/editor/common/core/range';
 import { IEditorService, SIDE_GROUP, ACTIVE_GROUP } from 'vs/workbench/services/editor/common/editorService';
 import { Schemas } from 'vs/base/common/network';
 import { isUri } from 'vs/workbench/contrib/debug/common/debugUtils';
+import { ITextEditorPane } from 'vs/workbench/common/editor';
+import { TextEditorSelectionRevealType } from 'vs/platform/editor/common/editor';
+import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/uriIdentity';
 
-const UNKNOWN_SOURCE_LABEL = nls.localize('unknownSource', "Unknown Source");
+export const UNKNOWN_SOURCE_LABEL = nls.localize('unknownSource', "Unknown Source");
 
 /**
  * Debug URI format
@@ -25,18 +28,19 @@ const UNKNOWN_SOURCE_LABEL = nls.localize('unknownSource', "Unknown Source");
  *         |          |                             |                          |
  *      scheme   source.path                    session id            source.reference
  *
- * the arbitrary_path and the session id are encoded with 'encodeURIComponent'
  *
  */
 
 export class Source {
 
-	public readonly uri: uri;
-	public available: boolean;
+	readonly uri: URI;
+	available: boolean;
+	raw: DebugProtocol.Source;
 
-	constructor(public raw: DebugProtocol.Source, sessionId: string) {
+	constructor(raw_: DebugProtocol.Source | undefined, sessionId: string, uriIdentityService: IUriIdentityService) {
 		let path: string;
-		if (raw) {
+		if (raw_) {
+			this.raw = raw_;
 			path = this.raw.path || this.raw.name || '';
 			this.available = true;
 		} else {
@@ -45,22 +49,7 @@ export class Source {
 			path = `${DEBUG_SCHEME}:${UNKNOWN_SOURCE_LABEL}`;
 		}
 
-		if (typeof this.raw.sourceReference === 'number' && this.raw.sourceReference > 0) {
-			this.uri = uri.parse(`${DEBUG_SCHEME}:${encodeURIComponent(path)}?session=${encodeURIComponent(sessionId)}&ref=${this.raw.sourceReference}`);
-		} else {
-			if (isUri(path)) {	// path looks like a uri
-				this.uri = uri.parse(path);
-			} else {
-				// assume a filesystem path
-				if (isAbsolute(path)) {
-					this.uri = uri.file(path);
-				} else {
-					// path is relative: since VS Code cannot deal with this by itself
-					// create a debug url that will result in a DAP 'source' request when the url is resolved.
-					this.uri = uri.parse(`${DEBUG_SCHEME}:${encodeURIComponent(path)}?session=${encodeURIComponent(sessionId)}`);
-				}
-			}
-		}
+		this.uri = getUriFromSource(this.raw, path, sessionId, uriIdentityService);
 	}
 
 	get name() {
@@ -83,21 +72,21 @@ export class Source {
 		return this.uri.scheme === DEBUG_SCHEME;
 	}
 
-	openInEditor(editorService: IEditorService, selection: IRange, preserveFocus?: boolean, sideBySide?: boolean, pinned?: boolean): Promise<any> {
-		return !this.available ? Promise.resolve(null) : editorService.openEditor({
+	openInEditor(editorService: IEditorService, selection: IRange, preserveFocus?: boolean, sideBySide?: boolean, pinned?: boolean): Promise<ITextEditorPane | undefined> {
+		return !this.available ? Promise.resolve(undefined) : editorService.openEditor({
 			resource: this.uri,
 			description: this.origin,
 			options: {
 				preserveFocus,
 				selection,
-				revealIfVisible: true,
-				revealInCenterIfOutsideViewport: true,
+				revealIfOpened: true,
+				selectionRevealType: TextEditorSelectionRevealType.CenterIfOutsideViewport,
 				pinned: pinned || (!preserveFocus && !this.inMemory)
 			}
 		}, sideBySide ? SIDE_GROUP : ACTIVE_GROUP);
 	}
 
-	static getEncodedDebugData(modelUri: uri): { name: string, path: string, sessionId?: string, sourceReference?: number } {
+	static getEncodedDebugData(modelUri: URI): { name: string, path: string, sessionId?: string, sourceReference?: number } {
 		let path: string;
 		let sourceReference: number | undefined;
 		let sessionId: string | undefined;
@@ -115,7 +104,7 @@ export class Source {
 						if (pair.length === 2) {
 							switch (pair[0]) {
 								case 'session':
-									sessionId = decodeURIComponent(pair[1]);
+									sessionId = pair[1];
 									break;
 								case 'ref':
 									sourceReference = parseInt(pair[1]);
@@ -137,4 +126,29 @@ export class Source {
 			sessionId
 		};
 	}
+}
+
+export function getUriFromSource(raw: DebugProtocol.Source, path: string | undefined, sessionId: string, uriIdentityService: IUriIdentityService): URI {
+	if (typeof raw.sourceReference === 'number' && raw.sourceReference > 0) {
+		return URI.from({
+			scheme: DEBUG_SCHEME,
+			path,
+			query: `session=${sessionId}&ref=${raw.sourceReference}`
+		});
+	}
+
+	if (path && isUri(path)) {	// path looks like a uri
+		return uriIdentityService.asCanonicalUri(URI.parse(path));
+	}
+	// assume a filesystem path
+	if (path && isAbsolute(path)) {
+		return uriIdentityService.asCanonicalUri(URI.file(path));
+	}
+	// path is relative: since VS Code cannot deal with this by itself
+	// create a debug url that will result in a DAP 'source' request when the url is resolved.
+	return uriIdentityService.asCanonicalUri(URI.from({
+		scheme: DEBUG_SCHEME,
+		path,
+		query: `session=${sessionId}`
+	}));
 }

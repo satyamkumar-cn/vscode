@@ -6,12 +6,23 @@
 import 'vs/css!./media/notificationsActions';
 import { INotificationViewItem } from 'vs/workbench/common/notifications';
 import { localize } from 'vs/nls';
-import { Action, IAction, ActionRunner } from 'vs/base/common/actions';
+import { Action, IAction, ActionRunner, WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification } from 'vs/base/common/actions';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { INotificationService } from 'vs/platform/notification/common/notification';
 import { CLEAR_NOTIFICATION, EXPAND_NOTIFICATION, COLLAPSE_NOTIFICATION, CLEAR_ALL_NOTIFICATIONS, HIDE_NOTIFICATIONS_CENTER } from 'vs/workbench/browser/parts/notifications/notificationsCommands';
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
+import { Codicon } from 'vs/base/common/codicons';
+import { registerIcon } from 'vs/platform/theme/common/iconRegistry';
+import { ThemeIcon } from 'vs/platform/theme/common/themeService';
+import { hash } from 'vs/base/common/hash';
+
+const clearIcon = registerIcon('notifications-clear', Codicon.close, localize('clearIcon', 'Icon for the clear action in notifications.'));
+const clearAllIcon = registerIcon('notifications-clear-all', Codicon.clearAll, localize('clearAllIcon', 'Icon for the clear all action in notifications.'));
+const hideIcon = registerIcon('notifications-hide', Codicon.chevronDown, localize('hideIcon', 'Icon for the hide action in notifications.'));
+const expandIcon = registerIcon('notifications-expand', Codicon.chevronUp, localize('expandIcon', 'Icon for the expand action in notifications.'));
+const collapseIcon = registerIcon('notifications-collapse', Codicon.chevronDown, localize('collapseIcon', 'Icon for the collapse action in notifications.'));
+const configureIcon = registerIcon('notifications-configure', Codicon.gear, localize('configureIcon', 'Icon for the configure action in notifications.'));
 
 export class ClearNotificationAction extends Action {
 
@@ -23,13 +34,11 @@ export class ClearNotificationAction extends Action {
 		label: string,
 		@ICommandService private readonly commandService: ICommandService
 	) {
-		super(id, label, 'clear-notification-action');
+		super(id, label, ThemeIcon.asClassName(clearIcon));
 	}
 
-	run(notification: INotificationViewItem): Promise<any> {
+	override async run(notification: INotificationViewItem): Promise<void> {
 		this.commandService.executeCommand(CLEAR_NOTIFICATION, notification);
-
-		return Promise.resolve();
 	}
 }
 
@@ -43,13 +52,11 @@ export class ClearAllNotificationsAction extends Action {
 		label: string,
 		@ICommandService private readonly commandService: ICommandService
 	) {
-		super(id, label, 'clear-all-notifications-action');
+		super(id, label, ThemeIcon.asClassName(clearAllIcon));
 	}
 
-	run(notification: INotificationViewItem): Promise<any> {
+	override async run(): Promise<void> {
 		this.commandService.executeCommand(CLEAR_ALL_NOTIFICATIONS);
-
-		return Promise.resolve();
 	}
 }
 
@@ -63,13 +70,11 @@ export class HideNotificationsCenterAction extends Action {
 		label: string,
 		@ICommandService private readonly commandService: ICommandService
 	) {
-		super(id, label, 'hide-all-notifications-action');
+		super(id, label, ThemeIcon.asClassName(hideIcon));
 	}
 
-	run(notification: INotificationViewItem): Promise<any> {
+	override async run(): Promise<void> {
 		this.commandService.executeCommand(HIDE_NOTIFICATIONS_CENTER);
-
-		return Promise.resolve();
 	}
 }
 
@@ -83,13 +88,11 @@ export class ExpandNotificationAction extends Action {
 		label: string,
 		@ICommandService private readonly commandService: ICommandService
 	) {
-		super(id, label, 'expand-notification-action');
+		super(id, label, ThemeIcon.asClassName(expandIcon));
 	}
 
-	run(notification: INotificationViewItem): Promise<any> {
+	override async run(notification: INotificationViewItem): Promise<void> {
 		this.commandService.executeCommand(EXPAND_NOTIFICATION, notification);
-
-		return Promise.resolve();
 	}
 }
 
@@ -103,13 +106,11 @@ export class CollapseNotificationAction extends Action {
 		label: string,
 		@ICommandService private readonly commandService: ICommandService
 	) {
-		super(id, label, 'collapse-notification-action');
+		super(id, label, ThemeIcon.asClassName(collapseIcon));
 	}
 
-	run(notification: INotificationViewItem): Promise<any> {
+	override async run(notification: INotificationViewItem): Promise<void> {
 		this.commandService.executeCommand(COLLAPSE_NOTIFICATION, notification);
-
-		return Promise.resolve();
 	}
 }
 
@@ -121,13 +122,9 @@ export class ConfigureNotificationAction extends Action {
 	constructor(
 		id: string,
 		label: string,
-		private _configurationActions: IAction[]
+		public readonly configurationActions: readonly IAction[]
 	) {
-		super(id, label, 'configure-notification-action');
-	}
-
-	get configurationActions(): IAction[] {
-		return this._configurationActions;
+		super(id, label, ThemeIcon.asClassName(configureIcon));
 	}
 }
 
@@ -144,12 +141,24 @@ export class CopyNotificationMessageAction extends Action {
 		super(id, label);
 	}
 
-	run(notification: INotificationViewItem): Promise<any> {
-		this.clipboardService.writeText(notification.message.raw);
-
-		return Promise.resolve();
+	override run(notification: INotificationViewItem): Promise<void> {
+		return this.clipboardService.writeText(notification.message.raw);
 	}
 }
+
+interface NotificationActionMetrics {
+	id: string;
+	actionLabel: string;
+	source: string;
+	silent: boolean;
+}
+
+type NotificationActionMetricsClassification = {
+	id: { classification: 'SystemMetaData', purpose: 'FeatureInsight' };
+	actionLabel: { classification: 'SystemMetaData', purpose: 'FeatureInsight' };
+	source: { classification: 'SystemMetaData', purpose: 'FeatureInsight' };
+	silent: { classification: 'SystemMetaData', purpose: 'FeatureInsight' };
+};
 
 export class NotificationActionRunner extends ActionRunner {
 
@@ -160,19 +169,18 @@ export class NotificationActionRunner extends ActionRunner {
 		super();
 	}
 
-	protected runAction(action: IAction, context: INotificationViewItem): Promise<any> {
-
-		/* __GDPR__
-			"workbenchActionExecuted" : {
-				"id" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
-				"from": { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
-			}
-		*/
-		this.telemetryService.publicLog('workbenchActionExecuted', { id: action.id, from: 'message' });
+	protected override async runAction(action: IAction, context: INotificationViewItem | undefined): Promise<void> {
+		this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: action.id, from: 'message' });
+		if (context) {
+			// If the context is not present it is a "global" notification action. Will be captured by other events
+			this.telemetryService.publicLog2<NotificationActionMetrics, NotificationActionMetricsClassification>('notification:actionExecuted', { id: hash(context.message.original.toString()).toString(), actionLabel: action.label, source: context.sourceId || 'core', silent: context.silent });
+		}
 
 		// Run and make sure to notify on any error again
-		super.runAction(action, context).then(undefined, error => this.notificationService.error(error));
-
-		return Promise.resolve();
+		try {
+			await super.runAction(action, context);
+		} catch (error) {
+			this.notificationService.error(error);
+		}
 	}
 }

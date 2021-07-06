@@ -4,91 +4,182 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { URI as uri } from 'vs/base/common/uri';
+import { Emitter, Event } from 'vs/base/common/event';
+import { Disposable, IDisposable } from 'vs/base/common/lifecycle';
+import { normalize } from 'vs/base/common/path';
 import * as platform from 'vs/base/common/platform';
-import { IConfigurationService, getConfigurationValue, IConfigurationOverrides } from 'vs/platform/configuration/common/configuration';
+import { isObject } from 'vs/base/common/types';
+import { URI as uri } from 'vs/base/common/uri';
+import { Selection } from 'vs/editor/common/core/selection';
+import { EditorType } from 'vs/editor/common/editorCommon';
 import { ICommandService } from 'vs/platform/commands/common/commands';
-import { IConfigurationResolverService } from 'vs/workbench/services/configurationResolver/common/configurationResolver';
-import { ConfigurationResolverService } from 'vs/workbench/services/configurationResolver/browser/configurationResolverService';
-import { IWorkspaceFolder } from 'vs/platform/workspace/common/workspace';
-import { TestEnvironmentService, TestEditorService, TestContextService, TestWindowService } from 'vs/workbench/test/workbenchTestServices';
+import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { TestConfigurationService } from 'vs/platform/configuration/test/common/testConfigurationService';
-import { Disposable } from 'vs/base/common/lifecycle';
-import { IQuickInputService, IQuickPickItem, QuickPickInput, IPickOptions, Omit, IInputOptions, IQuickInputButton, IQuickPick, IInputBox, IQuickNavigateConfiguration } from 'vs/platform/quickinput/common/quickInput';
-import { CancellationToken } from 'vs/base/common/cancellation';
-import * as Types from 'vs/base/common/types';
-import { IWindowService, IWindowConfiguration } from 'vs/platform/windows/common/windows';
+import { IFormatterChangeEvent, ILabelService, ResourceLabelFormatter } from 'vs/platform/label/common/label';
+import { IWorkspace, IWorkspaceFolder, Workspace } from 'vs/platform/workspace/common/workspace';
+import { testWorkspace } from 'vs/platform/workspace/test/common/testWorkspace';
+import { IWorkspaceIdentifier } from 'vs/platform/workspaces/common/workspaces';
+import { BaseConfigurationResolverService } from 'vs/workbench/services/configurationResolver/browser/configurationResolverService';
+import { IConfigurationResolverService } from 'vs/workbench/services/configurationResolver/common/configurationResolver';
+import { NativeWorkbenchEnvironmentService } from 'vs/workbench/services/environment/electron-sandbox/environmentService';
+import { TestEditorService, TestProductService, TestQuickInputService } from 'vs/workbench/test/browser/workbenchTestServices';
+import { TestContextService } from 'vs/workbench/test/common/workbenchTestServices';
+import { TestWorkbenchConfiguration } from 'vs/workbench/test/electron-browser/workbenchTestServices';
+
+const mockLineNumber = 10;
+class TestEditorServiceWithActiveEditor extends TestEditorService {
+	override get activeTextEditorControl(): any {
+		return {
+			getEditorType() {
+				return EditorType.ICodeEditor;
+			},
+			getSelection() {
+				return new Selection(mockLineNumber, 1, mockLineNumber, 10);
+			}
+		};
+	}
+	override get activeEditor(): any {
+		return {
+			get resource(): any {
+				return uri.parse('file:///VSCode/workspaceLocation/file');
+			}
+		};
+	}
+}
+
+class TestConfigurationResolverService extends BaseConfigurationResolverService {
+
+}
+
+const nullContext = {
+	getAppRoot: () => undefined,
+	getExecPath: () => undefined
+};
 
 suite('Configuration Resolver Service', () => {
 	let configurationResolverService: IConfigurationResolverService | null;
 	let envVariables: { [key: string]: string } = { key1: 'Value for key1', key2: 'Value for key2' };
-	let windowService: IWindowService;
+	let environmentService: MockWorkbenchEnvironmentService;
 	let mockCommandService: MockCommandService;
-	let editorService: TestEditorService;
+	let editorService: TestEditorServiceWithActiveEditor;
+	let containingWorkspace: Workspace;
 	let workspace: IWorkspaceFolder;
-	let quickInputService: MockQuickInputService;
+	let quickInputService: TestQuickInputService;
+	let labelService: MockLabelService;
 
 	setup(() => {
 		mockCommandService = new MockCommandService();
-		editorService = new TestEditorService();
-		quickInputService = new MockQuickInputService();
-		windowService = new MockWindowService(envVariables);
-		workspace = {
-			uri: uri.parse('file:///VSCode/workspaceLocation'),
-			name: 'hey',
-			index: 0,
-			toResource: () => null
-		};
-		configurationResolverService = new ConfigurationResolverService(windowService, editorService, TestEnvironmentService, new MockInputsConfigurationService(), mockCommandService, new TestContextService(), quickInputService);
+		editorService = new TestEditorServiceWithActiveEditor();
+		quickInputService = new TestQuickInputService();
+		environmentService = new MockWorkbenchEnvironmentService(envVariables);
+		labelService = new MockLabelService();
+		containingWorkspace = testWorkspace(uri.parse('file:///VSCode/workspaceLocation'));
+		workspace = containingWorkspace.folders[0];
+		configurationResolverService = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), editorService, new MockInputsConfigurationService(), mockCommandService, new TestContextService(containingWorkspace), quickInputService, labelService);
 	});
 
 	teardown(() => {
 		configurationResolverService = null;
 	});
 
-	test('substitute one', () => {
+	test('substitute one', async () => {
 		if (platform.isWindows) {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${workspaceFolder} xyz'), 'abc \\VSCode\\workspaceLocation xyz');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder} xyz'), 'abc \\VSCode\\workspaceLocation xyz');
 		} else {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${workspaceFolder} xyz'), 'abc /VSCode/workspaceLocation xyz');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder} xyz'), 'abc /VSCode/workspaceLocation xyz');
 		}
 	});
 
-	test('workspace root folder name', () => {
-		assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${workspaceRootFolderName} xyz'), 'abc workspaceLocation xyz');
-	});
-
-	// TODO@isidor mock the editor service properly
-	// test('current selected line number', () => {
-	// 	assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${lineNumber} xyz'), `abc ${editorService.mockLineNumber} xyz`);
-	// });
-
-	// test('current selected text', () => {
-	// 	assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${selectedText} xyz'), `abc ${editorService.mockSelectedText} xyz`);
-	// });
-
-	test('substitute many', () => {
+	test('workspace folder with argument', async () => {
 		if (platform.isWindows) {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, '${workspaceFolder} - ${workspaceFolder}'), '\\VSCode\\workspaceLocation - \\VSCode\\workspaceLocation');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder:workspaceLocation} xyz'), 'abc \\VSCode\\workspaceLocation xyz');
 		} else {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, '${workspaceFolder} - ${workspaceFolder}'), '/VSCode/workspaceLocation - /VSCode/workspaceLocation');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder:workspaceLocation} xyz'), 'abc /VSCode/workspaceLocation xyz');
 		}
 	});
 
-	test('substitute one env variable', () => {
+	test('workspace folder with invalid argument', () => {
+		assert.rejects(async () => await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder:invalidLocation} xyz'));
+	});
+
+	test('workspace folder with undefined workspace folder', () => {
+		assert.rejects(async () => await configurationResolverService!.resolveAsync(undefined, 'abc ${workspaceFolder} xyz'));
+	});
+
+	test('workspace folder with argument and undefined workspace folder', async () => {
 		if (platform.isWindows) {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${workspaceFolder} ${env:key1} xyz'), 'abc \\VSCode\\workspaceLocation Value for key1 xyz');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(undefined, 'abc ${workspaceFolder:workspaceLocation} xyz'), 'abc \\VSCode\\workspaceLocation xyz');
 		} else {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, 'abc ${workspaceFolder} ${env:key1} xyz'), 'abc /VSCode/workspaceLocation Value for key1 xyz');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(undefined, 'abc ${workspaceFolder:workspaceLocation} xyz'), 'abc /VSCode/workspaceLocation xyz');
 		}
 	});
 
-	test('substitute many env variable', () => {
+	test('workspace folder with invalid argument and undefined workspace folder', () => {
+		assert.rejects(async () => await configurationResolverService!.resolveAsync(undefined, 'abc ${workspaceFolder:invalidLocation} xyz'));
+	});
+
+	test('workspace root folder name', async () => {
+		assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceRootFolderName} xyz'), 'abc workspaceLocation xyz');
+	});
+
+	test('current selected line number', async () => {
+		assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${lineNumber} xyz'), `abc ${mockLineNumber} xyz`);
+	});
+
+	test('relative file', async () => {
+		assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${relativeFile} xyz'), 'abc file xyz');
+	});
+
+	test('relative file with argument', async () => {
+		assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${relativeFile:workspaceLocation} xyz'), 'abc file xyz');
+	});
+
+	test('relative file with invalid argument', () => {
+		assert.rejects(async () => await configurationResolverService!.resolveAsync(workspace, 'abc ${relativeFile:invalidLocation} xyz'));
+	});
+
+	test('relative file with undefined workspace folder', async () => {
 		if (platform.isWindows) {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, '${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), '\\VSCode\\workspaceLocation - \\VSCode\\workspaceLocation Value for key1 - Value for key2');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(undefined, 'abc ${relativeFile} xyz'), 'abc \\VSCode\\workspaceLocation\\file xyz');
 		} else {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, '${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), '/VSCode/workspaceLocation - /VSCode/workspaceLocation Value for key1 - Value for key2');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(undefined, 'abc ${relativeFile} xyz'), 'abc /VSCode/workspaceLocation/file xyz');
 		}
+	});
+
+	test('relative file with argument and undefined workspace folder', async () => {
+		assert.strictEqual(await configurationResolverService!.resolveAsync(undefined, 'abc ${relativeFile:workspaceLocation} xyz'), 'abc file xyz');
+	});
+
+	test('relative file with invalid argument and undefined workspace folder', () => {
+		assert.rejects(async () => await configurationResolverService!.resolveAsync(undefined, 'abc ${relativeFile:invalidLocation} xyz'));
+	});
+
+	test('substitute many', async () => {
+		if (platform.isWindows) {
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${workspaceFolder} - ${workspaceFolder}'), '\\VSCode\\workspaceLocation - \\VSCode\\workspaceLocation');
+		} else {
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${workspaceFolder} - ${workspaceFolder}'), '/VSCode/workspaceLocation - /VSCode/workspaceLocation');
+		}
+	});
+
+	test('substitute one env variable', async () => {
+		if (platform.isWindows) {
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder} ${env:key1} xyz'), 'abc \\VSCode\\workspaceLocation Value for key1 xyz');
+		} else {
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, 'abc ${workspaceFolder} ${env:key1} xyz'), 'abc /VSCode/workspaceLocation Value for key1 xyz');
+		}
+	});
+
+	test('substitute many env variable', async () => {
+		if (platform.isWindows) {
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), '\\VSCode\\workspaceLocation - \\VSCode\\workspaceLocation Value for key1 - Value for key2');
+		} else {
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), '/VSCode/workspaceLocation - /VSCode/workspaceLocation Value for key1 - Value for key2');
+		}
+	});
+
+	test('disallows nested keys (#77289)', async () => {
+		assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${env:key1} ${env:key1${env:key2}}'), 'Value for key1 ${env:key1${env:key2}}');
 	});
 
 	// test('substitute keys and values in object', () => {
@@ -96,23 +187,23 @@ suite('Configuration Resolver Service', () => {
 	// 		'${workspaceRootFolderName}': '${lineNumber}',
 	// 		'hey ${env:key1} ': '${workspaceRootFolderName}'
 	// 	};
-	// 	assert.deepEqual(configurationResolverService!.resolve(workspace, myObject), {
+	// 	assert.deepStrictEqual(configurationResolverService!.resolveAsync(workspace, myObject), {
 	// 		'workspaceLocation': `${editorService.mockLineNumber}`,
 	// 		'hey Value for key1 ': 'workspaceLocation'
 	// 	});
 	// });
 
 
-	test('substitute one env variable using platform case sensitivity', () => {
+	test('substitute one env variable using platform case sensitivity', async () => {
 		if (platform.isWindows) {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, '${env:key1} - ${env:Key1}'), 'Value for key1 - Value for key1');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${env:key1} - ${env:Key1}'), 'Value for key1 - Value for key1');
 		} else {
-			assert.strictEqual(configurationResolverService!.resolve(workspace, '${env:key1} - ${env:Key1}'), 'Value for key1 - ');
+			assert.strictEqual(await configurationResolverService!.resolveAsync(workspace, '${env:key1} - ${env:Key1}'), 'Value for key1 - ');
 		}
 	});
 
-	test('substitute one configuration variable', () => {
-		let configurationService: IConfigurationService = new MockConfigurationService({
+	test('substitute one configuration variable', async () => {
+		let configurationService: IConfigurationService = new TestConfigurationService({
 			editor: {
 				fontFamily: 'foo'
 			},
@@ -123,30 +214,24 @@ suite('Configuration Resolver Service', () => {
 			}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
-		assert.strictEqual(service.resolve(workspace, 'abc ${config:editor.fontFamily} xyz'), 'abc foo xyz');
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
+		assert.strictEqual(await service.resolveAsync(workspace, 'abc ${config:editor.fontFamily} xyz'), 'abc foo xyz');
 	});
 
-	test('substitute many configuration variables', () => {
-		let configurationService: IConfigurationService;
-		configurationService = new MockConfigurationService({
+	test('substitute configuration variable with undefined workspace folder', async () => {
+		let configurationService: IConfigurationService = new TestConfigurationService({
 			editor: {
 				fontFamily: 'foo'
-			},
-			terminal: {
-				integrated: {
-					fontFamily: 'bar'
-				}
 			}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
-		assert.strictEqual(service.resolve(workspace, 'abc ${config:editor.fontFamily} ${config:terminal.integrated.fontFamily} xyz'), 'abc foo bar xyz');
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
+		assert.strictEqual(await service.resolveAsync(undefined, 'abc ${config:editor.fontFamily} xyz'), 'abc foo xyz');
 	});
 
-	test('substitute one env variable and a configuration variable', () => {
+	test('substitute many configuration variables', async () => {
 		let configurationService: IConfigurationService;
-		configurationService = new MockConfigurationService({
+		configurationService = new TestConfigurationService({
 			editor: {
 				fontFamily: 'foo'
 			},
@@ -157,17 +242,34 @@ suite('Configuration Resolver Service', () => {
 			}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
+		assert.strictEqual(await service.resolveAsync(workspace, 'abc ${config:editor.fontFamily} ${config:terminal.integrated.fontFamily} xyz'), 'abc foo bar xyz');
+	});
+
+	test('substitute one env variable and a configuration variable', async () => {
+		let configurationService: IConfigurationService;
+		configurationService = new TestConfigurationService({
+			editor: {
+				fontFamily: 'foo'
+			},
+			terminal: {
+				integrated: {
+					fontFamily: 'bar'
+				}
+			}
+		});
+
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
 		if (platform.isWindows) {
-			assert.strictEqual(service.resolve(workspace, 'abc ${config:editor.fontFamily} ${workspaceFolder} ${env:key1} xyz'), 'abc foo \\VSCode\\workspaceLocation Value for key1 xyz');
+			assert.strictEqual(await service.resolveAsync(workspace, 'abc ${config:editor.fontFamily} ${workspaceFolder} ${env:key1} xyz'), 'abc foo \\VSCode\\workspaceLocation Value for key1 xyz');
 		} else {
-			assert.strictEqual(service.resolve(workspace, 'abc ${config:editor.fontFamily} ${workspaceFolder} ${env:key1} xyz'), 'abc foo /VSCode/workspaceLocation Value for key1 xyz');
+			assert.strictEqual(await service.resolveAsync(workspace, 'abc ${config:editor.fontFamily} ${workspaceFolder} ${env:key1} xyz'), 'abc foo /VSCode/workspaceLocation Value for key1 xyz');
 		}
 	});
 
-	test('substitute many env variable and a configuration variable', () => {
+	test('substitute many env variable and a configuration variable', async () => {
 		let configurationService: IConfigurationService;
-		configurationService = new MockConfigurationService({
+		configurationService = new TestConfigurationService({
 			editor: {
 				fontFamily: 'foo'
 			},
@@ -178,17 +280,17 @@ suite('Configuration Resolver Service', () => {
 			}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
 		if (platform.isWindows) {
-			assert.strictEqual(service.resolve(workspace, '${config:editor.fontFamily} ${config:terminal.integrated.fontFamily} ${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), 'foo bar \\VSCode\\workspaceLocation - \\VSCode\\workspaceLocation Value for key1 - Value for key2');
+			assert.strictEqual(await service.resolveAsync(workspace, '${config:editor.fontFamily} ${config:terminal.integrated.fontFamily} ${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), 'foo bar \\VSCode\\workspaceLocation - \\VSCode\\workspaceLocation Value for key1 - Value for key2');
 		} else {
-			assert.strictEqual(service.resolve(workspace, '${config:editor.fontFamily} ${config:terminal.integrated.fontFamily} ${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), 'foo bar /VSCode/workspaceLocation - /VSCode/workspaceLocation Value for key1 - Value for key2');
+			assert.strictEqual(await service.resolveAsync(workspace, '${config:editor.fontFamily} ${config:terminal.integrated.fontFamily} ${workspaceFolder} - ${workspaceFolder} ${env:key1} - ${env:key2}'), 'foo bar /VSCode/workspaceLocation - /VSCode/workspaceLocation Value for key1 - Value for key2');
 		}
 	});
 
-	test('mixed types of configuration variables', () => {
+	test('mixed types of configuration variables', async () => {
 		let configurationService: IConfigurationService;
-		configurationService = new MockConfigurationService({
+		configurationService = new TestConfigurationService({
 			editor: {
 				fontFamily: 'foo',
 				lineNumbers: 123,
@@ -212,38 +314,38 @@ suite('Configuration Resolver Service', () => {
 			}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
-		assert.strictEqual(service.resolve(workspace, 'abc ${config:editor.fontFamily} ${config:editor.lineNumbers} ${config:editor.insertSpaces} xyz'), 'abc foo 123 false xyz');
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
+		assert.strictEqual(await service.resolveAsync(workspace, 'abc ${config:editor.fontFamily} ${config:editor.lineNumbers} ${config:editor.insertSpaces} xyz'), 'abc foo 123 false xyz');
 	});
 
-	test('uses original variable as fallback', () => {
+	test('uses original variable as fallback', async () => {
 		let configurationService: IConfigurationService;
-		configurationService = new MockConfigurationService({
+		configurationService = new TestConfigurationService({
 			editor: {}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
-		assert.strictEqual(service.resolve(workspace, 'abc ${unknownVariable} xyz'), 'abc ${unknownVariable} xyz');
-		assert.strictEqual(service.resolve(workspace, 'abc ${env:unknownVariable} xyz'), 'abc  xyz');
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
+		assert.strictEqual(await service.resolveAsync(workspace, 'abc ${unknownVariable} xyz'), 'abc ${unknownVariable} xyz');
+		assert.strictEqual(await service.resolveAsync(workspace, 'abc ${env:unknownVariable} xyz'), 'abc  xyz');
 	});
 
 	test('configuration variables with invalid accessor', () => {
 		let configurationService: IConfigurationService;
-		configurationService = new MockConfigurationService({
+		configurationService = new TestConfigurationService({
 			editor: {
 				fontFamily: 'foo'
 			}
 		});
 
-		let service = new ConfigurationResolverService(windowService, new TestEditorService(), TestEnvironmentService, configurationService, mockCommandService, new TestContextService(), quickInputService);
+		let service = new TestConfigurationResolverService(nullContext, Promise.resolve(environmentService.userEnv), new TestEditorServiceWithActiveEditor(), configurationService, mockCommandService, new TestContextService(), quickInputService, labelService);
 
-		assert.throws(() => service.resolve(workspace, 'abc ${env} xyz'));
-		assert.throws(() => service.resolve(workspace, 'abc ${env:} xyz'));
-		assert.throws(() => service.resolve(workspace, 'abc ${config} xyz'));
-		assert.throws(() => service.resolve(workspace, 'abc ${config:} xyz'));
-		assert.throws(() => service.resolve(workspace, 'abc ${config:editor} xyz'));
-		assert.throws(() => service.resolve(workspace, 'abc ${config:editor..fontFamily} xyz'));
-		assert.throws(() => service.resolve(workspace, 'abc ${config:editor.none.none2} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${env} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${env:} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${config} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${config:} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${config:editor} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${config:editor..fontFamily} xyz'));
+		assert.rejects(async () => await service.resolveAsync(workspace, 'abc ${config:editor.none.none2} xyz'));
 	});
 
 	test('a single command variable', () => {
@@ -259,8 +361,7 @@ suite('Configuration Resolver Service', () => {
 		};
 
 		return configurationResolverService!.resolveWithInteractionReplace(undefined, configuration).then(result => {
-
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -270,7 +371,7 @@ suite('Configuration Resolver Service', () => {
 				'outDir': null
 			});
 
-			assert.equal(1, mockCommandService.callCount);
+			assert.strictEqual(1, mockCommandService.callCount);
 		});
 	});
 
@@ -288,8 +389,7 @@ suite('Configuration Resolver Service', () => {
 		commandVariables['commandVariable1'] = 'command1';
 
 		return configurationResolverService!.resolveWithInteractionReplace(undefined, configuration, undefined, commandVariables).then(result => {
-
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -299,7 +399,7 @@ suite('Configuration Resolver Service', () => {
 				'outDir': null
 			});
 
-			assert.equal(1, mockCommandService.callCount);
+			assert.strictEqual(1, mockCommandService.callCount);
 		});
 	});
 
@@ -321,8 +421,7 @@ suite('Configuration Resolver Service', () => {
 		commandVariables['commandVariable1'] = 'command1';
 
 		return configurationResolverService!.resolveWithInteractionReplace(undefined, configuration, undefined, commandVariables).then(result => {
-
-			assert.deepEqual(result, {
+			const expected = {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -333,9 +432,18 @@ suite('Configuration Resolver Service', () => {
 				'env': {
 					'processId': '__command2-result__',
 				}
-			});
+			};
 
-			assert.equal(2, mockCommandService.callCount);
+			assert.deepStrictEqual(Object.keys(result), Object.keys(expected));
+			Object.keys(result).forEach(property => {
+				const expectedProperty = (<any>expected)[property];
+				if (isObject(result[property])) {
+					assert.deepStrictEqual({ ...result[property] }, expectedProperty);
+				} else {
+					assert.deepStrictEqual(result[property], expectedProperty);
+				}
+			});
+			assert.strictEqual(2, mockCommandService.callCount);
 		});
 	});
 
@@ -353,7 +461,7 @@ suite('Configuration Resolver Service', () => {
 
 		return configurationResolverService!.resolveWithInteractionReplace(undefined, configuration, undefined, commandVariables).then(result => {
 
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -361,9 +469,10 @@ suite('Configuration Resolver Service', () => {
 				'value': 'Value for key1'
 			});
 
-			assert.equal(1, mockCommandService.callCount);
+			assert.strictEqual(1, mockCommandService.callCount);
 		});
 	});
+
 	test('a single prompt input variable', () => {
 
 		const configuration = {
@@ -378,7 +487,7 @@ suite('Configuration Resolver Service', () => {
 
 		return configurationResolverService!.resolveWithInteractionReplace(workspace, configuration, 'tasks').then(result => {
 
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -388,9 +497,10 @@ suite('Configuration Resolver Service', () => {
 				'outDir': null
 			});
 
-			assert.equal(0, mockCommandService.callCount);
+			assert.strictEqual(0, mockCommandService.callCount);
 		});
 	});
+
 	test('a single pick input variable', () => {
 
 		const configuration = {
@@ -405,7 +515,7 @@ suite('Configuration Resolver Service', () => {
 
 		return configurationResolverService!.resolveWithInteractionReplace(workspace, configuration, 'tasks').then(result => {
 
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -415,9 +525,10 @@ suite('Configuration Resolver Service', () => {
 				'outDir': null
 			});
 
-			assert.equal(0, mockCommandService.callCount);
+			assert.strictEqual(0, mockCommandService.callCount);
 		});
 	});
+
 	test('a single command input variable', () => {
 
 		const configuration = {
@@ -432,7 +543,7 @@ suite('Configuration Resolver Service', () => {
 
 		return configurationResolverService!.resolveWithInteractionReplace(workspace, configuration, 'tasks').then(result => {
 
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'Attach to Process',
 				'type': 'node',
 				'request': 'attach',
@@ -442,9 +553,10 @@ suite('Configuration Resolver Service', () => {
 				'outDir': null
 			});
 
-			assert.equal(1, mockCommandService.callCount);
+			assert.strictEqual(1, mockCommandService.callCount);
 		});
 	});
+
 	test('several input variables and command', () => {
 
 		const configuration = {
@@ -460,7 +572,7 @@ suite('Configuration Resolver Service', () => {
 
 		return configurationResolverService!.resolveWithInteractionReplace(workspace, configuration, 'tasks').then(result => {
 
-			assert.deepEqual(result, {
+			assert.deepStrictEqual({ ...result }, {
 				'name': 'resolvedEnterinput3',
 				'type': 'command1-result',
 				'request': 'resolvedEnterinput1',
@@ -471,44 +583,61 @@ suite('Configuration Resolver Service', () => {
 				'outDir': null
 			});
 
-			assert.equal(2, mockCommandService.callCount);
+			assert.strictEqual(2, mockCommandService.callCount);
+		});
+	});
+
+	test('input variable with undefined workspace folder', () => {
+
+		const configuration = {
+			'name': 'Attach to Process',
+			'type': 'node',
+			'request': 'attach',
+			'processId': '${input:input1}',
+			'port': 5858,
+			'sourceMaps': false,
+			'outDir': null
+		};
+
+		return configurationResolverService!.resolveWithInteractionReplace(undefined, configuration, 'tasks').then(result => {
+
+			assert.deepStrictEqual({ ...result }, {
+				'name': 'Attach to Process',
+				'type': 'node',
+				'request': 'attach',
+				'processId': 'resolvedEnterinput1',
+				'port': 5858,
+				'sourceMaps': false,
+				'outDir': null
+			});
+
+			assert.strictEqual(0, mockCommandService.callCount);
+		});
+	});
+
+	test('contributed variable', () => {
+		const buildTask = 'npm: compile';
+		const variable = 'defaultBuildTask';
+		const configuration = {
+			'name': '${' + variable + '}',
+		};
+		configurationResolverService!.contributeVariable(variable, async () => { return buildTask; });
+		return configurationResolverService!.resolveWithInteractionReplace(workspace, configuration).then(result => {
+			assert.deepStrictEqual({ ...result }, {
+				'name': `${buildTask}`
+			});
 		});
 	});
 });
 
 
-class MockConfigurationService implements IConfigurationService {
-	public _serviceBrand: any;
-	public serviceId = IConfigurationService;
-	public constructor(private configuration: any = {}) { }
-	public inspect<T>(key: string, overrides?: IConfigurationOverrides): any { return { value: getConfigurationValue<T>(this.getValue(), key), default: getConfigurationValue<T>(this.getValue(), key), user: getConfigurationValue<T>(this.getValue(), key), workspaceFolder: undefined, folder: undefined }; }
-	public keys() { return { default: [], user: [], workspace: [], workspaceFolder: [] }; }
-	public getValue(): any;
-	public getValue(value: string): any;
-	public getValue(value?: any): any {
-		if (!value) {
-			return this.configuration;
-		}
-		const valuePath = (<string>value).split('.');
-		let object = this.configuration;
-		while (valuePath.length && object) {
-			object = object[valuePath.shift()!];
-		}
-
-		return object;
-	}
-	public updateValue(): Promise<void> { return Promise.resolve(); }
-	public getConfigurationData(): any { return null; }
-	public onDidChangeConfiguration() { return { dispose() { } }; }
-	public reloadConfiguration() { return Promise.resolve(); }
-}
-
 class MockCommandService implements ICommandService {
 
-	public _serviceBrand: any;
+	public _serviceBrand: undefined;
 	public callCount = 0;
 
 	onWillExecuteCommand = () => Disposable.None;
+	onDidExecuteCommand = () => Disposable.None;
 	public executeCommand(commandId: string, ...args: any[]): Promise<any> {
 		this.callCount++;
 
@@ -523,60 +652,31 @@ class MockCommandService implements ICommandService {
 	}
 }
 
-class MockQuickInputService implements IQuickInputService {
-	_serviceBrand: any;
-
-	public pick<T extends IQuickPickItem>(picks: Promise<QuickPickInput<T>[]> | QuickPickInput<T>[], options?: IPickOptions<T> & { canPickMany: true }, token?: CancellationToken): Promise<T[]>;
-	public pick<T extends IQuickPickItem>(picks: Promise<QuickPickInput<T>[]> | QuickPickInput<T>[], options?: IPickOptions<T> & { canPickMany: false }, token?: CancellationToken): Promise<T>;
-	public pick<T extends IQuickPickItem>(picks: Promise<QuickPickInput<T>[]> | QuickPickInput<T>[], options?: Omit<IPickOptions<T>, 'canPickMany'>, token?: CancellationToken): Promise<T> {
-		if (Types.isArray(picks)) {
-			return Promise.resolve(<T>{ label: 'selectedPick', description: 'pick description' });
-		} else {
-			return Promise.resolve(undefined);
-		}
+class MockLabelService implements ILabelService {
+	_serviceBrand: undefined;
+	getUriLabel(resource: uri, options?: { relative?: boolean | undefined; noPrefix?: boolean | undefined; endWithSeparator?: boolean | undefined; }): string {
+		return normalize(resource.fsPath);
 	}
-
-	public input(options?: IInputOptions, token?: CancellationToken): Promise<string> {
-		return Promise.resolve('resolved' + options.prompt);
+	getUriBasenameLabel(resource: uri): string {
+		throw new Error('Method not implemented.');
 	}
-
-	backButton: IQuickInputButton;
-
-	createQuickPick<T extends IQuickPickItem>(): IQuickPick<T> {
-		throw new Error('not implemented.');
+	getWorkspaceLabel(workspace: uri | IWorkspaceIdentifier | IWorkspace, options?: { verbose: boolean; }): string {
+		throw new Error('Method not implemented.');
 	}
-
-	createInputBox(): IInputBox {
-		throw new Error('not implemented.');
+	getHostLabel(scheme: string, authority?: string): string {
+		throw new Error('Method not implemented.');
 	}
-
-	focus(): void {
-		throw new Error('not implemented.');
+	getSeparator(scheme: string, authority?: string): '/' | '\\' {
+		throw new Error('Method not implemented.');
 	}
-
-	toggle(): void {
-		throw new Error('not implemented.');
+	registerFormatter(formatter: ResourceLabelFormatter): IDisposable {
+		throw new Error('Method not implemented.');
 	}
-
-	navigate(next: boolean, quickNavigate?: IQuickNavigateConfiguration): void {
-		throw new Error('not implemented.');
-	}
-
-	accept(): Promise<void> {
-		throw new Error('not implemented.');
-	}
-
-	back(): Promise<void> {
-		throw new Error('not implemented.');
-	}
-
-	cancel(): Promise<void> {
-		throw new Error('not implemented.');
-	}
+	onDidChangeFormatters: Event<IFormatterChangeEvent> = new Emitter<IFormatterChangeEvent>().event;
 }
 
 class MockInputsConfigurationService extends TestConfigurationService {
-	public getValue(arg1?: any, arg2?: any): any {
+	public override getValue(arg1?: any, arg2?: any): any {
 		let configuration;
 		if (arg1 === 'tasks') {
 			configuration = {
@@ -598,7 +698,8 @@ class MockInputsConfigurationService extends TestConfigurationService {
 						id: 'input3',
 						type: 'promptString',
 						description: 'Enterinput3',
-						default: 'default input3'
+						default: 'default input3',
+						password: true
 					},
 					{
 						id: 'input4',
@@ -615,13 +716,9 @@ class MockInputsConfigurationService extends TestConfigurationService {
 	}
 }
 
-class MockWindowService extends TestWindowService {
+class MockWorkbenchEnvironmentService extends NativeWorkbenchEnvironmentService {
 
-	constructor(private env: platform.IProcessEnvironment) {
-		super();
-	}
-
-	getConfiguration(): IWindowConfiguration {
-		return { userEnv: this.env } as IWindowConfiguration;
+	constructor(public userEnv: platform.IProcessEnvironment) {
+		super({ ...TestWorkbenchConfiguration, userEnv }, TestProductService);
 	}
 }

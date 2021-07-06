@@ -6,15 +6,357 @@
 // THIS IS A GENERATED FILE. DO NOT EDIT DIRECTLY.
 
 
-export enum MarkerTag {
-	Unnecessary = 1
+export enum AccessibilitySupport {
+	/**
+	 * This should be the browser case where it is not known if a screen reader is attached or no.
+	 */
+	Unknown = 0,
+	Disabled = 1,
+	Enabled = 2
 }
 
-export enum MarkerSeverity {
-	Hint = 1,
-	Info = 2,
-	Warning = 4,
-	Error = 8
+export enum CompletionItemInsertTextRule {
+	/**
+	 * Adjust whitespace/indentation of multiline insert texts to
+	 * match the current line indentation.
+	 */
+	KeepWhitespace = 1,
+	/**
+	 * `insertText` is a snippet.
+	 */
+	InsertAsSnippet = 4
+}
+
+export enum CompletionItemKind {
+	Method = 0,
+	Function = 1,
+	Constructor = 2,
+	Field = 3,
+	Variable = 4,
+	Class = 5,
+	Struct = 6,
+	Interface = 7,
+	Module = 8,
+	Property = 9,
+	Event = 10,
+	Operator = 11,
+	Unit = 12,
+	Value = 13,
+	Constant = 14,
+	Enum = 15,
+	EnumMember = 16,
+	Keyword = 17,
+	Text = 18,
+	Color = 19,
+	File = 20,
+	Reference = 21,
+	Customcolor = 22,
+	Folder = 23,
+	TypeParameter = 24,
+	User = 25,
+	Issue = 26,
+	Snippet = 27
+}
+
+export enum CompletionItemTag {
+	Deprecated = 1
+}
+
+/**
+ * How a suggest provider was triggered.
+ */
+export enum CompletionTriggerKind {
+	Invoke = 0,
+	TriggerCharacter = 1,
+	TriggerForIncompleteCompletions = 2
+}
+
+/**
+ * A positioning preference for rendering content widgets.
+ */
+export enum ContentWidgetPositionPreference {
+	/**
+	 * Place the content widget exactly at a position
+	 */
+	EXACT = 0,
+	/**
+	 * Place the content widget above a position
+	 */
+	ABOVE = 1,
+	/**
+	 * Place the content widget below a position
+	 */
+	BELOW = 2
+}
+
+/**
+ * Describes the reason the cursor has changed its position.
+ */
+export enum CursorChangeReason {
+	/**
+	 * Unknown or not set.
+	 */
+	NotSet = 0,
+	/**
+	 * A `model.setValue()` was called.
+	 */
+	ContentFlush = 1,
+	/**
+	 * The `model` has been changed outside of this cursor and the cursor recovers its position from associated markers.
+	 */
+	RecoverFromMarkers = 2,
+	/**
+	 * There was an explicit user gesture.
+	 */
+	Explicit = 3,
+	/**
+	 * There was a Paste.
+	 */
+	Paste = 4,
+	/**
+	 * There was an Undo.
+	 */
+	Undo = 5,
+	/**
+	 * There was a Redo.
+	 */
+	Redo = 6
+}
+
+/**
+ * The default end of line to use when instantiating models.
+ */
+export enum DefaultEndOfLine {
+	/**
+	 * Use line feed (\n) as the end of line character.
+	 */
+	LF = 1,
+	/**
+	 * Use carriage return and line feed (\r\n) as the end of line character.
+	 */
+	CRLF = 2
+}
+
+/**
+ * A document highlight kind.
+ */
+export enum DocumentHighlightKind {
+	/**
+	 * A textual occurrence.
+	 */
+	Text = 0,
+	/**
+	 * Read-access of a symbol, like reading a variable.
+	 */
+	Read = 1,
+	/**
+	 * Write-access of a symbol, like writing to a variable.
+	 */
+	Write = 2
+}
+
+/**
+ * Configuration options for auto indentation in the editor
+ */
+export enum EditorAutoIndentStrategy {
+	None = 0,
+	Keep = 1,
+	Brackets = 2,
+	Advanced = 3,
+	Full = 4
+}
+
+export enum EditorOption {
+	acceptSuggestionOnCommitCharacter = 0,
+	acceptSuggestionOnEnter = 1,
+	accessibilitySupport = 2,
+	accessibilityPageSize = 3,
+	ariaLabel = 4,
+	autoClosingBrackets = 5,
+	autoClosingDelete = 6,
+	autoClosingOvertype = 7,
+	autoClosingQuotes = 8,
+	autoIndent = 9,
+	automaticLayout = 10,
+	autoSurround = 11,
+	codeLens = 12,
+	codeLensFontFamily = 13,
+	codeLensFontSize = 14,
+	colorDecorators = 15,
+	columnSelection = 16,
+	comments = 17,
+	contextmenu = 18,
+	copyWithSyntaxHighlighting = 19,
+	cursorBlinking = 20,
+	cursorSmoothCaretAnimation = 21,
+	cursorStyle = 22,
+	cursorSurroundingLines = 23,
+	cursorSurroundingLinesStyle = 24,
+	cursorWidth = 25,
+	disableLayerHinting = 26,
+	disableMonospaceOptimizations = 27,
+	domReadOnly = 28,
+	dragAndDrop = 29,
+	emptySelectionClipboard = 30,
+	extraEditorClassName = 31,
+	fastScrollSensitivity = 32,
+	find = 33,
+	fixedOverflowWidgets = 34,
+	folding = 35,
+	foldingStrategy = 36,
+	foldingHighlight = 37,
+	unfoldOnClickAfterEndOfLine = 38,
+	fontFamily = 39,
+	fontInfo = 40,
+	fontLigatures = 41,
+	fontSize = 42,
+	fontWeight = 43,
+	formatOnPaste = 44,
+	formatOnType = 45,
+	glyphMargin = 46,
+	gotoLocation = 47,
+	hideCursorInOverviewRuler = 48,
+	highlightActiveIndentGuide = 49,
+	hover = 50,
+	inDiffEditor = 51,
+	letterSpacing = 52,
+	lightbulb = 53,
+	lineDecorationsWidth = 54,
+	lineHeight = 55,
+	lineNumbers = 56,
+	lineNumbersMinChars = 57,
+	linkedEditing = 58,
+	links = 59,
+	matchBrackets = 60,
+	minimap = 61,
+	mouseStyle = 62,
+	mouseWheelScrollSensitivity = 63,
+	mouseWheelZoom = 64,
+	multiCursorMergeOverlapping = 65,
+	multiCursorModifier = 66,
+	multiCursorPaste = 67,
+	occurrencesHighlight = 68,
+	overviewRulerBorder = 69,
+	overviewRulerLanes = 70,
+	padding = 71,
+	parameterHints = 72,
+	peekWidgetDefaultFocus = 73,
+	definitionLinkOpensInPeek = 74,
+	quickSuggestions = 75,
+	quickSuggestionsDelay = 76,
+	readOnly = 77,
+	renameOnType = 78,
+	renderControlCharacters = 79,
+	renderIndentGuides = 80,
+	renderFinalNewline = 81,
+	renderLineHighlight = 82,
+	renderLineHighlightOnlyWhenFocus = 83,
+	renderValidationDecorations = 84,
+	renderWhitespace = 85,
+	revealHorizontalRightPadding = 86,
+	roundedSelection = 87,
+	rulers = 88,
+	scrollbar = 89,
+	scrollBeyondLastColumn = 90,
+	scrollBeyondLastLine = 91,
+	scrollPredominantAxis = 92,
+	selectionClipboard = 93,
+	selectionHighlight = 94,
+	selectOnLineNumbers = 95,
+	showFoldingControls = 96,
+	showUnused = 97,
+	snippetSuggestions = 98,
+	smartSelect = 99,
+	smoothScrolling = 100,
+	stickyTabStops = 101,
+	stopRenderingLineAfter = 102,
+	suggest = 103,
+	suggestFontSize = 104,
+	suggestLineHeight = 105,
+	suggestOnTriggerCharacters = 106,
+	suggestSelection = 107,
+	tabCompletion = 108,
+	tabIndex = 109,
+	unusualLineTerminators = 110,
+	useTabStops = 111,
+	wordSeparators = 112,
+	wordWrap = 113,
+	wordWrapBreakAfterCharacters = 114,
+	wordWrapBreakBeforeCharacters = 115,
+	wordWrapColumn = 116,
+	wordWrapOverride1 = 117,
+	wordWrapOverride2 = 118,
+	wrappingIndent = 119,
+	wrappingStrategy = 120,
+	showDeprecated = 121,
+	inlineHints = 122,
+	editorClassName = 123,
+	pixelRatio = 124,
+	tabFocusMode = 125,
+	layoutInfo = 126,
+	wrappingInfo = 127
+}
+
+/**
+ * End of line character preference.
+ */
+export enum EndOfLinePreference {
+	/**
+	 * Use the end of line character identified in the text buffer.
+	 */
+	TextDefined = 0,
+	/**
+	 * Use line feed (\n) as the end of line character.
+	 */
+	LF = 1,
+	/**
+	 * Use carriage return and line feed (\r\n) as the end of line character.
+	 */
+	CRLF = 2
+}
+
+/**
+ * End of line character preference.
+ */
+export enum EndOfLineSequence {
+	/**
+	 * Use line feed (\n) as the end of line character.
+	 */
+	LF = 0,
+	/**
+	 * Use carriage return and line feed (\r\n) as the end of line character.
+	 */
+	CRLF = 1
+}
+
+/**
+ * Describes what to do with the indentation when pressing Enter.
+ */
+export enum IndentAction {
+	/**
+	 * Insert new line and copy the previous line's indentation.
+	 */
+	None = 0,
+	/**
+	 * Insert new line and indent once (relative to the previous line's indentation).
+	 */
+	Indent = 1,
+	/**
+	 * Insert two new lines:
+	 *  - the first one indented which will hold the cursor
+	 *  - the second one at the same indentation level
+	 */
+	IndentOutdent = 2,
+	/**
+	 * Insert new line and outdent once (relative to the previous line's indentation).
+	 */
+	Outdent = 3
+}
+
+export enum InlineHintKind {
+	Other = 0,
+	Type = 1,
+	Parameter = 2
 }
 
 /**
@@ -23,6 +365,7 @@ export enum MarkerSeverity {
  * But these are "more general", as they should work across browsers & OS`s.
  */
 export enum KeyCode {
+	DependsOnKbLayout = -1,
 	/**
 	 * Placed first to cover the 0 value of the enum.
 	 */
@@ -198,264 +541,24 @@ export enum KeyCode {
 	MAX_VALUE = 112
 }
 
-/**
- * The direction of a selection.
- */
-export enum SelectionDirection {
-	/**
-	 * The selection starts above where it ends.
-	 */
-	LTR = 0,
-	/**
-	 * The selection starts below where it ends.
-	 */
-	RTL = 1
+export enum MarkerSeverity {
+	Hint = 1,
+	Info = 2,
+	Warning = 4,
+	Error = 8
 }
 
-export enum ScrollbarVisibility {
-	Auto = 1,
-	Hidden = 2,
-	Visible = 3
+export enum MarkerTag {
+	Unnecessary = 1,
+	Deprecated = 2
 }
 
 /**
- * Vertical Lane in the overview ruler of the editor.
+ * Position in the minimap to render the decoration.
  */
-export enum OverviewRulerLane {
-	Left = 1,
-	Center = 2,
-	Right = 4,
-	Full = 7
-}
-
-/**
- * End of line character preference.
- */
-export enum EndOfLinePreference {
-	/**
-	 * Use the end of line character identified in the text buffer.
-	 */
-	TextDefined = 0,
-	/**
-	 * Use line feed (\n) as the end of line character.
-	 */
-	LF = 1,
-	/**
-	 * Use carriage return and line feed (\r\n) as the end of line character.
-	 */
-	CRLF = 2
-}
-
-/**
- * The default end of line to use when instantiating models.
- */
-export enum DefaultEndOfLine {
-	/**
-	 * Use line feed (\n) as the end of line character.
-	 */
-	LF = 1,
-	/**
-	 * Use carriage return and line feed (\r\n) as the end of line character.
-	 */
-	CRLF = 2
-}
-
-/**
- * End of line character preference.
- */
-export enum EndOfLineSequence {
-	/**
-	 * Use line feed (\n) as the end of line character.
-	 */
-	LF = 0,
-	/**
-	 * Use carriage return and line feed (\r\n) as the end of line character.
-	 */
-	CRLF = 1
-}
-
-/**
- * Describes the behavior of decorations when typing/editing near their edges.
- * Note: Please do not edit the values, as they very carefully match `DecorationRangeBehavior`
- */
-export enum TrackedRangeStickiness {
-	AlwaysGrowsWhenTypingAtEdges = 0,
-	NeverGrowsWhenTypingAtEdges = 1,
-	GrowsOnlyWhenTypingBefore = 2,
-	GrowsOnlyWhenTypingAfter = 3
-}
-
-export enum ScrollType {
-	Smooth = 0,
-	Immediate = 1
-}
-
-/**
- * Describes the reason the cursor has changed its position.
- */
-export enum CursorChangeReason {
-	/**
-	 * Unknown or not set.
-	 */
-	NotSet = 0,
-	/**
-	 * A `model.setValue()` was called.
-	 */
-	ContentFlush = 1,
-	/**
-	 * The `model` has been changed outside of this cursor and the cursor recovers its position from associated markers.
-	 */
-	RecoverFromMarkers = 2,
-	/**
-	 * There was an explicit user gesture.
-	 */
-	Explicit = 3,
-	/**
-	 * There was a Paste.
-	 */
-	Paste = 4,
-	/**
-	 * There was an Undo.
-	 */
-	Undo = 5,
-	/**
-	 * There was a Redo.
-	 */
-	Redo = 6
-}
-
-export enum RenderMinimap {
-	None = 0,
-	Small = 1,
-	Large = 2,
-	SmallBlocks = 3,
-	LargeBlocks = 4
-}
-
-/**
- * Describes how to indent wrapped lines.
- */
-export enum WrappingIndent {
-	/**
-	 * No indentation => wrapped lines begin at column 1.
-	 */
-	None = 0,
-	/**
-	 * Same => wrapped lines get the same indentation as the parent.
-	 */
-	Same = 1,
-	/**
-	 * Indent => wrapped lines get +1 indentation toward the parent.
-	 */
-	Indent = 2,
-	/**
-	 * DeepIndent => wrapped lines get +2 indentation toward the parent.
-	 */
-	DeepIndent = 3
-}
-
-/**
- * The kind of animation in which the editor's cursor should be rendered.
- */
-export enum TextEditorCursorBlinkingStyle {
-	/**
-	 * Hidden
-	 */
-	Hidden = 0,
-	/**
-	 * Blinking
-	 */
-	Blink = 1,
-	/**
-	 * Blinking with smooth fading
-	 */
-	Smooth = 2,
-	/**
-	 * Blinking with prolonged filled state and smooth fading
-	 */
-	Phase = 3,
-	/**
-	 * Expand collapse animation on the y axis
-	 */
-	Expand = 4,
-	/**
-	 * No-Blinking
-	 */
-	Solid = 5
-}
-
-/**
- * The style in which the editor's cursor should be rendered.
- */
-export enum TextEditorCursorStyle {
-	/**
-	 * As a vertical line (sitting between two characters).
-	 */
-	Line = 1,
-	/**
-	 * As a block (sitting on top of a character).
-	 */
-	Block = 2,
-	/**
-	 * As a horizontal line (sitting under a character).
-	 */
-	Underline = 3,
-	/**
-	 * As a thin vertical line (sitting between two characters).
-	 */
-	LineThin = 4,
-	/**
-	 * As an outlined block (sitting on top of a character).
-	 */
-	BlockOutline = 5,
-	/**
-	 * As a thin horizontal line (sitting under a character).
-	 */
-	UnderlineThin = 6
-}
-
-export enum RenderLineNumbersType {
-	Off = 0,
-	On = 1,
-	Relative = 2,
-	Interval = 3,
-	Custom = 4
-}
-
-/**
- * A positioning preference for rendering content widgets.
- */
-export enum ContentWidgetPositionPreference {
-	/**
-	 * Place the content widget exactly at a position
-	 */
-	EXACT = 0,
-	/**
-	 * Place the content widget above a position
-	 */
-	ABOVE = 1,
-	/**
-	 * Place the content widget below a position
-	 */
-	BELOW = 2
-}
-
-/**
- * A positioning preference for rendering overlay widgets.
- */
-export enum OverlayWidgetPositionPreference {
-	/**
-	 * Position the overlay widget in the top right corner
-	 */
-	TOP_RIGHT_CORNER = 0,
-	/**
-	 * Position the overlay widget in the bottom right corner
-	 */
-	BOTTOM_RIGHT_CORNER = 1,
-	/**
-	 * Position the overlay widget in the top center
-	 */
-	TOP_CENTER = 2
+export enum MinimapPosition {
+	Inline = 1,
+	Gutter = 2
 }
 
 /**
@@ -521,101 +624,76 @@ export enum MouseTargetType {
 }
 
 /**
- * Describes what to do with the indentation when pressing Enter.
+ * A positioning preference for rendering overlay widgets.
  */
-export enum IndentAction {
+export enum OverlayWidgetPositionPreference {
 	/**
-	 * Insert new line and copy the previous line's indentation.
+	 * Position the overlay widget in the top right corner
 	 */
-	None = 0,
+	TOP_RIGHT_CORNER = 0,
 	/**
-	 * Insert new line and indent once (relative to the previous line's indentation).
+	 * Position the overlay widget in the bottom right corner
 	 */
-	Indent = 1,
+	BOTTOM_RIGHT_CORNER = 1,
 	/**
-	 * Insert two new lines:
-	 *  - the first one indented which will hold the cursor
-	 *  - the second one at the same indentation level
+	 * Position the overlay widget in the top center
 	 */
-	IndentOutdent = 2,
-	/**
-	 * Insert new line and outdent once (relative to the previous line's indentation).
-	 */
-	Outdent = 3
-}
-
-export enum CompletionItemKind {
-	Method = 0,
-	Function = 1,
-	Constructor = 2,
-	Field = 3,
-	Variable = 4,
-	Class = 5,
-	Struct = 6,
-	Interface = 7,
-	Module = 8,
-	Property = 9,
-	Event = 10,
-	Operator = 11,
-	Unit = 12,
-	Value = 13,
-	Constant = 14,
-	Enum = 15,
-	EnumMember = 16,
-	Keyword = 17,
-	Text = 18,
-	Color = 19,
-	File = 20,
-	Reference = 21,
-	Customcolor = 22,
-	Folder = 23,
-	TypeParameter = 24,
-	Snippet = 25
-}
-
-export enum CompletionItemInsertTextRule {
-	/**
-	 * Adjust whitespace/indentation of multiline insert texts to
-	 * match the current line indentation.
-	 */
-	KeepWhitespace = 1,
-	/**
-	 * `insertText` is a snippet.
-	 */
-	InsertAsSnippet = 4
+	TOP_CENTER = 2
 }
 
 /**
- * How a suggest provider was triggered.
+ * Vertical Lane in the overview ruler of the editor.
  */
-export enum CompletionTriggerKind {
-	Invoke = 0,
-	TriggerCharacter = 1,
-	TriggerForIncompleteCompletions = 2
+export enum OverviewRulerLane {
+	Left = 1,
+	Center = 2,
+	Right = 4,
+	Full = 7
+}
+
+export enum RenderLineNumbersType {
+	Off = 0,
+	On = 1,
+	Relative = 2,
+	Interval = 3,
+	Custom = 4
+}
+
+export enum RenderMinimap {
+	None = 0,
+	Text = 1,
+	Blocks = 2
+}
+
+export enum ScrollType {
+	Smooth = 0,
+	Immediate = 1
+}
+
+export enum ScrollbarVisibility {
+	Auto = 1,
+	Hidden = 2,
+	Visible = 3
+}
+
+/**
+ * The direction of a selection.
+ */
+export enum SelectionDirection {
+	/**
+	 * The selection starts above where it ends.
+	 */
+	LTR = 0,
+	/**
+	 * The selection starts below where it ends.
+	 */
+	RTL = 1
 }
 
 export enum SignatureHelpTriggerKind {
 	Invoke = 1,
 	TriggerCharacter = 2,
 	ContentChange = 3
-}
-
-/**
- * A document highlight kind.
- */
-export enum DocumentHighlightKind {
-	/**
-	 * A textual occurrence.
-	 */
-	Text = 0,
-	/**
-	 * Read-access of a symbol, like reading a variable.
-	 */
-	Read = 1,
-	/**
-	 * Write-access of a symbol, like writing to a variable.
-	 */
-	Write = 2
 }
 
 /**
@@ -648,4 +726,101 @@ export enum SymbolKind {
 	Event = 23,
 	Operator = 24,
 	TypeParameter = 25
+}
+
+export enum SymbolTag {
+	Deprecated = 1
+}
+
+/**
+ * The kind of animation in which the editor's cursor should be rendered.
+ */
+export enum TextEditorCursorBlinkingStyle {
+	/**
+	 * Hidden
+	 */
+	Hidden = 0,
+	/**
+	 * Blinking
+	 */
+	Blink = 1,
+	/**
+	 * Blinking with smooth fading
+	 */
+	Smooth = 2,
+	/**
+	 * Blinking with prolonged filled state and smooth fading
+	 */
+	Phase = 3,
+	/**
+	 * Expand collapse animation on the y axis
+	 */
+	Expand = 4,
+	/**
+	 * No-Blinking
+	 */
+	Solid = 5
+}
+
+/**
+ * The style in which the editor's cursor should be rendered.
+ */
+export enum TextEditorCursorStyle {
+	/**
+	 * As a vertical line (sitting between two characters).
+	 */
+	Line = 1,
+	/**
+	 * As a block (sitting on top of a character).
+	 */
+	Block = 2,
+	/**
+	 * As a horizontal line (sitting under a character).
+	 */
+	Underline = 3,
+	/**
+	 * As a thin vertical line (sitting between two characters).
+	 */
+	LineThin = 4,
+	/**
+	 * As an outlined block (sitting on top of a character).
+	 */
+	BlockOutline = 5,
+	/**
+	 * As a thin horizontal line (sitting under a character).
+	 */
+	UnderlineThin = 6
+}
+
+/**
+ * Describes the behavior of decorations when typing/editing near their edges.
+ * Note: Please do not edit the values, as they very carefully match `DecorationRangeBehavior`
+ */
+export enum TrackedRangeStickiness {
+	AlwaysGrowsWhenTypingAtEdges = 0,
+	NeverGrowsWhenTypingAtEdges = 1,
+	GrowsOnlyWhenTypingBefore = 2,
+	GrowsOnlyWhenTypingAfter = 3
+}
+
+/**
+ * Describes how to indent wrapped lines.
+ */
+export enum WrappingIndent {
+	/**
+	 * No indentation => wrapped lines begin at column 1.
+	 */
+	None = 0,
+	/**
+	 * Same => wrapped lines get the same indentation as the parent.
+	 */
+	Same = 1,
+	/**
+	 * Indent => wrapped lines get +1 indentation toward the parent.
+	 */
+	Indent = 2,
+	/**
+	 * DeepIndent => wrapped lines get +2 indentation toward the parent.
+	 */
+	DeepIndent = 3
 }

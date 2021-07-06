@@ -9,15 +9,16 @@ import * as commands from './commands/index';
 import LinkProvider from './features/documentLinkProvider';
 import MDDocumentSymbolProvider from './features/documentSymbolProvider';
 import MarkdownFoldingProvider from './features/foldingProvider';
+import MarkdownSmartSelect from './features/smartSelect';
 import { MarkdownContentProvider } from './features/previewContentProvider';
 import { MarkdownPreviewManager } from './features/previewManager';
 import MarkdownWorkspaceSymbolProvider from './features/workspaceSymbolProvider';
 import { Logger } from './logger';
 import { MarkdownEngine } from './markdownEngine';
 import { getMarkdownExtensionContributions } from './markdownExtensions';
-import { ExtensionContentSecurityPolicyArbiter, PreviewSecuritySelector, ContentSecurityPolicyArbiter } from './security';
-import { loadDefaultTelemetryReporter, TelemetryReporter } from './telemetryReporter';
+import { ContentSecurityPolicyArbiter, ExtensionContentSecurityPolicyArbiter, PreviewSecuritySelector } from './security';
 import { githubSlugifier } from './slugify';
+import { loadDefaultTelemetryReporter, TelemetryReporter } from './telemetryReporter';
 
 
 export function activate(context: vscode.ExtensionContext) {
@@ -33,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const contentProvider = new MarkdownContentProvider(engine, context, cspArbiter, contributions, logger);
 	const symbolProvider = new MDDocumentSymbolProvider(engine);
-	const previewManager = new MarkdownPreviewManager(contentProvider, logger, contributions);
+	const previewManager = new MarkdownPreviewManager(contentProvider, logger, contributions, engine);
 	context.subscriptions.push(previewManager);
 
 	context.subscriptions.push(registerMarkdownLanguageFeatures(symbolProvider, engine));
@@ -49,18 +50,18 @@ function registerMarkdownLanguageFeatures(
 	symbolProvider: MDDocumentSymbolProvider,
 	engine: MarkdownEngine
 ): vscode.Disposable {
-	const selector: vscode.DocumentSelector = [
-		{ language: 'markdown', scheme: 'file' },
-		{ language: 'markdown', scheme: 'untitled' }
-	];
+	const selector: vscode.DocumentSelector = { language: 'markdown', scheme: '*' };
+
+	const charPattern = '(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})';
 
 	return vscode.Disposable.from(
 		vscode.languages.setLanguageConfiguration('markdown', {
-			wordPattern: new RegExp('(\\p{Alphabetic}|\\p{Number})+', 'ug'),
+			wordPattern: new RegExp(`${charPattern}((${charPattern}|[_])?${charPattern})*`, 'ug'),
 		}),
 		vscode.languages.registerDocumentSymbolProvider(selector, symbolProvider),
 		vscode.languages.registerDocumentLinkProvider(selector, new LinkProvider()),
 		vscode.languages.registerFoldingRangeProvider(selector, new MarkdownFoldingProvider(engine)),
+		vscode.languages.registerSelectionRangeProvider(selector, new MarkdownSmartSelect(engine)),
 		vscode.languages.registerWorkspaceSymbolProvider(new MarkdownWorkspaceSymbolProvider(symbolProvider))
 	);
 }
@@ -78,11 +79,12 @@ function registerMarkdownCommands(
 	commandManager.register(new commands.ShowPreviewToSideCommand(previewManager, telemetryReporter));
 	commandManager.register(new commands.ShowLockedPreviewToSideCommand(previewManager, telemetryReporter));
 	commandManager.register(new commands.ShowSourceCommand(previewManager));
-	commandManager.register(new commands.RefreshPreviewCommand(previewManager));
+	commandManager.register(new commands.RefreshPreviewCommand(previewManager, engine));
 	commandManager.register(new commands.MoveCursorToPositionCommand());
 	commandManager.register(new commands.ShowPreviewSecuritySelectorCommand(previewSecuritySelector, previewManager));
 	commandManager.register(new commands.OpenDocumentLinkCommand(engine));
 	commandManager.register(new commands.ToggleLockCommand(previewManager));
+	commandManager.register(new commands.RenderDocument(engine));
 	return commandManager;
 }
 

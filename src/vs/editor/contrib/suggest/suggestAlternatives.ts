@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { dispose, IDisposable } from 'vs/base/common/lifecycle';
+import { IDisposable } from 'vs/base/common/lifecycle';
 import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
 import { IContextKey, IContextKeyService, RawContextKey } from 'vs/platform/contextkey/common/contextkey';
 import { CompletionModel } from './completionModel';
@@ -11,15 +11,15 @@ import { ISelectedSuggestion } from './suggestWidget';
 
 export class SuggestAlternatives {
 
-	static OtherSuggestions = new RawContextKey<boolean>('hasOtherSuggestions', false);
+	static readonly OtherSuggestions = new RawContextKey<boolean>('hasOtherSuggestions', false);
 
 	private readonly _ckOtherSuggestions: IContextKey<boolean>;
 
-	private _index: number;
+	private _index: number = 0;
 	private _model: CompletionModel | undefined;
 	private _acceptNext: ((selected: ISelectedSuggestion) => any) | undefined;
-	private _listener: IDisposable;
-	private _ignore: boolean;
+	private _listener: IDisposable | undefined;
+	private _ignore: boolean | undefined;
 
 	constructor(
 		private readonly _editor: ICodeEditor,
@@ -34,7 +34,7 @@ export class SuggestAlternatives {
 
 	reset(): void {
 		this._ckOtherSuggestions.reset();
-		dispose(this._listener);
+		this._listener?.dispose();
 		this._model = undefined;
 		this._acceptNext = undefined;
 		this._ignore = false;

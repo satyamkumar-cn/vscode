@@ -43,15 +43,19 @@ export class FormattingEdit {
 		return fullModelRange.equalsRange(editRange);
 	}
 
-	static execute(editor: ICodeEditor, _edits: TextEdit[]) {
-		editor.pushUndoStop();
-		let edits = FormattingEdit._handleEolEdits(editor, _edits);
+	static execute(editor: ICodeEditor, _edits: TextEdit[], addUndoStops: boolean) {
+		if (addUndoStops) {
+			editor.pushUndoStop();
+		}
+		const edits = FormattingEdit._handleEolEdits(editor, _edits);
 		if (edits.length === 1 && FormattingEdit._isFullModelReplaceEdit(editor, edits[0])) {
 			// We use replace semantics and hope that markers stay put...
 			editor.executeEdits('formatEditsCommand', edits.map(edit => EditOperation.replace(Range.lift(edit.range), edit.text)));
 		} else {
 			editor.executeEdits('formatEditsCommand', edits.map(edit => EditOperation.replaceMove(Range.lift(edit.range), edit.text)));
 		}
-		editor.pushUndoStop();
+		if (addUndoStops) {
+			editor.pushUndoStop();
+		}
 	}
 }

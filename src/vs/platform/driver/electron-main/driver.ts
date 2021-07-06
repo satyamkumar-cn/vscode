@@ -3,20 +3,24 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IDriver, DriverChannel, IElement, WindowDriverChannelClient, IWindowDriverRegistry, WindowDriverRegistryChannel, IWindowDriver, IDriverOptions } from 'vs/platform/driver/node/driver';
+import { DriverChannel, WindowDriverRegistryChannel } from 'vs/platform/driver/node/driver';
+import { WindowDriverChannelClient } from 'vs/platform/driver/common/driverIpc';
 import { IWindowsMainService } from 'vs/platform/windows/electron-main/windows';
 import { serve as serveNet } from 'vs/base/parts/ipc/node/ipc.net';
 import { combinedDisposable, IDisposable } from 'vs/base/common/lifecycle';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
-import { IPCServer, StaticRouter } from 'vs/base/parts/ipc/node/ipc';
+import { IPCServer, StaticRouter } from 'vs/base/parts/ipc/common/ipc';
 import { SimpleKeybinding, KeyCode } from 'vs/base/common/keyCodes';
 import { USLayoutResolvedKeybinding } from 'vs/platform/keybinding/common/usLayoutResolvedKeybinding';
 import { OS } from 'vs/base/common/platform';
 import { Emitter, Event } from 'vs/base/common/event';
-import { IEnvironmentService } from 'vs/platform/environment/common/environment';
+import { IEnvironmentMainService } from 'vs/platform/environment/electron-main/environmentMainService';
 import { ScanCodeBinding } from 'vs/base/common/scanCode';
 import { KeybindingParser } from 'vs/base/common/keybindingParser';
 import { timeout } from 'vs/base/common/async';
+import { IDriver, IDriverOptions, IElement, IWindowDriver, IWindowDriverRegistry } from 'vs/platform/driver/common/driver';
+import { ILifecycleMainService } from 'vs/platform/lifecycle/electron-main/lifecycleMainService';
+import { INativeHostMainService } from 'vs/platform/native/electron-main/nativeHostMainService';
 
 function isSilentKeyCode(keyCode: KeyCode) {
 	return keyCode < KeyCode.KEY_0;
@@ -24,16 +28,18 @@ function isSilentKeyCode(keyCode: KeyCode) {
 
 export class Driver implements IDriver, IWindowDriverRegistry {
 
-	_serviceBrand: any;
+	declare readonly _serviceBrand: undefined;
 
 	private registeredWindowIds = new Set<number>();
 	private reloadingWindowIds = new Set<number>();
-	private onDidReloadingChange = new Emitter<void>();
+	private readonly onDidReloadingChange = new Emitter<void>();
 
 	constructor(
 		private windowServer: IPCServer,
 		private options: IDriverOptions,
-		@IWindowsMainService private readonly windowsService: IWindowsMainService
+		@IWindowsMainService private readonly windowsMainService: IWindowsMainService,
+		@ILifecycleMainService private readonly lifecycleMainService: ILifecycleMainService,
+		@INativeHostMainService private readonly nativeHostMainService: INativeHostMainService
 	) { }
 
 	async registerWindowDriver(windowId: number): Promise<IDriverOptions> {
@@ -48,7 +54,7 @@ export class Driver implements IDriver, IWindowDriverRegistry {
 	}
 
 	async getWindowIds(): Promise<number[]> {
-		return this.windowsService.getWindows()
+		return this.windowsMainService.getWindows()
 			.map(w => w.id)
 			.filter(id => this.registeredWindowIds.has(id) && !this.reloadingWindowIds.has(id));
 	}
@@ -56,28 +62,28 @@ export class Driver implements IDriver, IWindowDriverRegistry {
 	async capturePage(windowId: number): Promise<string> {
 		await this.whenUnfrozen(windowId);
 
-		const window = this.windowsService.getWindowById(windowId);
-		if (!window) {
+		const window = this.windowsMainService.getWindowById(windowId);
+		if (!window?.win) {
 			throw new Error('Invalid window');
 		}
 		const webContents = window.win.webContents;
-		const image = await new Promise<Electron.NativeImage>(c => webContents.capturePage(c));
+		const image = await webContents.capturePage();
 		return image.toPNG().toString('base64');
 	}
 
 	async reloadWindow(windowId: number): Promise<void> {
 		await this.whenUnfrozen(windowId);
 
-		const window = this.windowsService.getWindowById(windowId);
+		const window = this.windowsMainService.getWindowById(windowId);
 		if (!window) {
 			throw new Error('Invalid window');
 		}
 		this.reloadingWindowIds.add(windowId);
-		this.windowsService.reload(window);
+		this.lifecycleMainService.reload(window);
 	}
 
 	async exitApplication(): Promise<void> {
-		return this.windowsService.quit();
+		return this.nativeHostMainService.quit(undefined);
 	}
 
 	async dispatchKeybinding(windowId: number, keybinding: string): Promise<void> {
@@ -95,8 +101,8 @@ export class Driver implements IDriver, IWindowDriverRegistry {
 			throw new Error('ScanCodeBindings not supported');
 		}
 
-		const window = this.windowsService.getWindowById(windowId);
-		if (!window) {
+		const window = this.windowsMainService.getWindowById(windowId);
+		if (!window?.win) {
 			throw new Error('Invalid window');
 		}
 		const webContents = window.win.webContents;
@@ -163,6 +169,11 @@ export class Driver implements IDriver, IWindowDriverRegistry {
 		return await windowDriver.getElements(selector, recursive);
 	}
 
+	async getElementXY(windowId: number, selector: string, xoffset?: number, yoffset?: number): Promise<{ x: number; y: number; }> {
+		const windowDriver = await this.getWindowDriver(windowId);
+		return await windowDriver.getElementXY(selector, xoffset, yoffset);
+	}
+
 	async typeInEditor(windowId: number, selector: string, text: string): Promise<void> {
 		const windowDriver = await this.getWindowDriver(windowId);
 		await windowDriver.typeInEditor(selector, text);
@@ -197,10 +208,10 @@ export class Driver implements IDriver, IWindowDriverRegistry {
 export async function serve(
 	windowServer: IPCServer,
 	handle: string,
-	environmentService: IEnvironmentService,
+	environmentMainService: IEnvironmentMainService,
 	instantiationService: IInstantiationService
 ): Promise<IDisposable> {
-	const verbose = environmentService.driverVerbose;
+	const verbose = environmentMainService.driverVerbose;
 	const driver = instantiationService.createInstance(Driver, windowServer, { verbose });
 
 	const windowDriverRegistryChannel = new WindowDriverRegistryChannel(driver);
@@ -210,5 +221,5 @@ export async function serve(
 	const channel = new DriverChannel(driver);
 	server.registerChannel('driver', channel);
 
-	return combinedDisposable([server, windowServer]);
+	return combinedDisposable(server, windowServer);
 }

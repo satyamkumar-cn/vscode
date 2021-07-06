@@ -3,19 +3,63 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { INotificationService, INotification, INotificationHandle, Severity, NotificationMessage, INotificationActions, IPromptChoice, IPromptOptions } from 'vs/platform/notification/common/notification';
-import { INotificationsModel, NotificationsModel, ChoiceAction } from 'vs/workbench/common/notifications';
-import { dispose, Disposable, IDisposable } from 'vs/base/common/lifecycle';
-import { Event } from 'vs/base/common/event';
+import { localize } from 'vs/nls';
+import { INotificationService, INotification, INotificationHandle, Severity, NotificationMessage, INotificationActions, IPromptChoice, IPromptOptions, IStatusMessageOptions, NoOpNotification, NeverShowAgainScope, NotificationsFilter } from 'vs/platform/notification/common/notification';
+import { NotificationsModel, ChoiceAction, NotificationChangeType } from 'vs/workbench/common/notifications';
+import { Disposable, DisposableStore, IDisposable } from 'vs/base/common/lifecycle';
+import { Emitter, Event } from 'vs/base/common/event';
+import { registerSingleton } from 'vs/platform/instantiation/common/extensions';
+import { IAction, Action } from 'vs/base/common/actions';
+import { IStorageService, StorageScope, StorageTarget } from 'vs/platform/storage/common/storage';
 
 export class NotificationService extends Disposable implements INotificationService {
 
-	_serviceBrand: any;
+	declare readonly _serviceBrand: undefined;
 
-	private _model: INotificationsModel = this._register(new NotificationsModel());
+	readonly model = this._register(new NotificationsModel());
 
-	get model(): INotificationsModel {
-		return this._model;
+	private readonly _onDidAddNotification = this._register(new Emitter<INotification>());
+	readonly onDidAddNotification = this._onDidAddNotification.event;
+
+	private readonly _onDidRemoveNotification = this._register(new Emitter<INotification>());
+	readonly onDidRemoveNotification = this._onDidRemoveNotification.event;
+
+	constructor(
+		@IStorageService private readonly storageService: IStorageService
+	) {
+		super();
+
+		this.registerListeners();
+	}
+
+	private registerListeners(): void {
+		this._register(this.model.onDidChangeNotification(e => {
+			switch (e.kind) {
+				case NotificationChangeType.ADD:
+				case NotificationChangeType.REMOVE: {
+					const notification: INotification = {
+						message: e.item.message.original,
+						severity: e.item.severity,
+						source: typeof e.item.sourceId === 'string' && typeof e.item.source === 'string' ? { id: e.item.sourceId, label: e.item.source } : e.item.source,
+						silent: e.item.silent
+					};
+
+					if (e.kind === NotificationChangeType.ADD) {
+						this._onDidAddNotification.fire(notification);
+					}
+
+					if (e.kind === NotificationChangeType.REMOVE) {
+						this._onDidRemoveNotification.fire(notification);
+					}
+
+					break;
+				}
+			}
+		}));
+	}
+
+	setFilter(filter: NotificationsFilter): void {
+		this.model.setFilter(filter);
 	}
 
 	info(message: NotificationMessage | NotificationMessage[]): void {
@@ -25,7 +69,7 @@ export class NotificationService extends Disposable implements INotificationServ
 			return;
 		}
 
-		this.model.notify({ severity: Severity.Info, message });
+		this.model.addNotification({ severity: Severity.Info, message });
 	}
 
 	warn(message: NotificationMessage | NotificationMessage[]): void {
@@ -35,7 +79,7 @@ export class NotificationService extends Disposable implements INotificationServ
 			return;
 		}
 
-		this.model.notify({ severity: Severity.Warning, message });
+		this.model.addNotification({ severity: Severity.Warning, message });
 	}
 
 	error(message: NotificationMessage | NotificationMessage[]): void {
@@ -45,37 +89,103 @@ export class NotificationService extends Disposable implements INotificationServ
 			return;
 		}
 
-		this.model.notify({ severity: Severity.Error, message });
+		this.model.addNotification({ severity: Severity.Error, message });
 	}
 
 	notify(notification: INotification): INotificationHandle {
-		return this.model.notify(notification);
+		const toDispose = new DisposableStore();
+
+		// Handle neverShowAgain option accordingly
+		let handle: INotificationHandle;
+		if (notification.neverShowAgain) {
+			const scope = notification.neverShowAgain.scope === NeverShowAgainScope.WORKSPACE ? StorageScope.WORKSPACE : StorageScope.GLOBAL;
+			const id = notification.neverShowAgain.id;
+
+			// If the user already picked to not show the notification
+			// again, we return with a no-op notification here
+			if (this.storageService.getBoolean(id, scope)) {
+				return new NoOpNotification();
+			}
+
+			const neverShowAgainAction = toDispose.add(new Action(
+				'workbench.notification.neverShowAgain',
+				localize('neverShowAgain', "Don't Show Again"),
+				undefined, true, async () => {
+
+					// Close notification
+					handle.close();
+
+					// Remember choice
+					this.storageService.store(id, true, scope, StorageTarget.USER);
+				}));
+
+			// Insert as primary or secondary action
+			const actions = {
+				primary: notification.actions?.primary || [],
+				secondary: notification.actions?.secondary || []
+			};
+			if (!notification.neverShowAgain.isSecondary) {
+				actions.primary = [neverShowAgainAction, ...actions.primary]; // action comes first
+			} else {
+				actions.secondary = [...actions.secondary, neverShowAgainAction]; // actions comes last
+			}
+
+			notification.actions = actions;
+		}
+
+		// Show notification
+		handle = this.model.addNotification(notification);
+
+		// Cleanup when notification gets disposed
+		Event.once(handle.onDidClose)(() => toDispose.dispose());
+
+		return handle;
 	}
 
 	prompt(severity: Severity, message: string, choices: IPromptChoice[], options?: IPromptOptions): INotificationHandle {
-		const toDispose: IDisposable[] = [];
+		const toDispose = new DisposableStore();
+
+		// Handle neverShowAgain option accordingly
+		if (options?.neverShowAgain) {
+			const scope = options.neverShowAgain.scope === NeverShowAgainScope.WORKSPACE ? StorageScope.WORKSPACE : StorageScope.GLOBAL;
+			const id = options.neverShowAgain.id;
+
+			// If the user already picked to not show the notification
+			// again, we return with a no-op notification here
+			if (this.storageService.getBoolean(id, scope)) {
+				return new NoOpNotification();
+			}
+
+			const neverShowAgainChoice = {
+				label: localize('neverShowAgain', "Don't Show Again"),
+				run: () => this.storageService.store(id, true, scope, StorageTarget.USER),
+				isSecondary: options.neverShowAgain.isSecondary
+			};
+
+			// Insert as primary or secondary action
+			if (!options.neverShowAgain.isSecondary) {
+				choices = [neverShowAgainChoice, ...choices]; // action comes first
+			} else {
+				choices = [...choices, neverShowAgainChoice]; // actions comes last
+			}
+		}
 
 		let choiceClicked = false;
 		let handle: INotificationHandle;
 
 		// Convert choices into primary/secondary actions
-		const actions: INotificationActions = { primary: [], secondary: [] };
+		const primaryActions: IAction[] = [];
+		const secondaryActions: IAction[] = [];
 		choices.forEach((choice, index) => {
 			const action = new ChoiceAction(`workbench.dialog.choice.${index}`, choice);
 			if (!choice.isSecondary) {
-				if (!actions.primary) {
-					actions.primary = [];
-				}
-				actions.primary.push(action);
+				primaryActions.push(action);
 			} else {
-				if (!actions.secondary) {
-					actions.secondary = [];
-				}
-				actions.secondary.push(action);
+				secondaryActions.push(action);
 			}
 
 			// React to action being clicked
-			toDispose.push(action.onDidRun(() => {
+			toDispose.add(action.onDidRun(() => {
 				choiceClicked = true;
 
 				// Close notification unless we are told to keep open
@@ -84,16 +194,17 @@ export class NotificationService extends Disposable implements INotificationServ
 				}
 			}));
 
-			toDispose.push(action);
+			toDispose.add(action);
 		});
 
 		// Show notification with actions
-		handle = this.notify({ severity, message, actions, sticky: options && options.sticky, silent: options && options.silent });
+		const actions: INotificationActions = { primary: primaryActions, secondary: secondaryActions };
+		handle = this.notify({ severity, message, actions, sticky: options?.sticky, silent: options?.silent });
 
 		Event.once(handle.onDidClose)(() => {
 
 			// Cleanup when notification gets disposed
-			dispose(toDispose);
+			toDispose.dispose();
 
 			// Indicate cancellation to the outside if no action was executed
 			if (options && typeof options.onCancel === 'function' && !choiceClicked) {
@@ -103,4 +214,10 @@ export class NotificationService extends Disposable implements INotificationServ
 
 		return handle;
 	}
+
+	status(message: NotificationMessage, options?: IStatusMessageOptions): IDisposable {
+		return this.model.showStatusMessage(message, options);
+	}
 }
+
+registerSingleton(INotificationService, NotificationService, true);
