@@ -248,7 +248,7 @@
       "remote": [
         {
           "id": "gitpod.workspace",
-          "name": "Gitpod Workspace"
+          "name": "DevSpaces Workspace"
         }
       ]
     },
